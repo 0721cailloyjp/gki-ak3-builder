@@ -90,6 +90,18 @@ jobs:
           echo "方案        : ${{ inputs.root_solution }}"
           cat "$SOLUTION_CONFIG"
 
+          # 硬断言：解析必须真的产出输出。漏写 $GITHUB_OUTPUT 会让下游拿到空字符串，
+          # 表现为 shell 报 "The empty string is not a valid path" 这种难查的错误。
+          for k in sol_id sol_name sol_repo sol_ref sol_needs_git sol_version_formula mgr_repo mgr_pkgs; do
+            v="$(printf '%s' '${{ toJSON(steps.sol.outputs) }}' | grep -o "\"$k\":\"[^\"]*\"" | head -1)"
+            echo "  assert $k -> ${v:-<missing>}"
+          done
+          [ -n "${{ steps.sol.outputs.sol_repo }}" ] \
+            || { echo "::error::sol_repo 为空：resolve-solution.sh 未写入 GITHUB_OUTPUT"; exit 1; }
+          [ -n "${{ steps.sol.outputs.sol_name }}" ] \
+            || { echo "::error::sol_name 为空：resolve-solution.sh 未写入 GITHUB_OUTPUT"; exit 1; }
+          echo "OK: 方案输出已就绪 (sol_name=${{ steps.sol.outputs.sol_name }})"
+
       - name: 输出构建参数
         run: |
           echo "root 方案     : ${{ inputs.root_solution }}"
@@ -135,7 +147,7 @@ jobs:
       # 浅克隆会让 commit 计数退化成 1 → 版本号错误 → 管理器提示"需要更新内核"。
       # 因此默认必须做完整克隆；只有支持 GITHUB_COMMITS 环境变量覆盖的方案
       # （目前是 SukiSU-Ultra）才允许浅克隆。
-      - name: 拉取 ${{ steps.sol.outputs.sol_name }} 内核源码
+      - name: 拉取 root 方案内核源码
         env:
           NEEDS_GIT: ${{ steps.sol.outputs.sol_needs_git }}
           SOL_REPO: ${{ steps.sol.outputs.sol_repo }}
@@ -143,6 +155,10 @@ jobs:
         run: |
           REF="${{ inputs.solution_ref }}"
           [ -n "$REF" ] || REF="$DEFAULT_REF"
+          echo "==> 方案: ${{ steps.sol.outputs.sol_name }}  仓库: $SOL_REPO  引用: $REF"
+          # 空值保护：空字符串会让 git 报 "The empty string is not a valid path"
+          [ -n "$SOL_REPO" ] || { echo "::error::SOL_REPO 为空"; exit 1; }
+          [ -n "$REF" ]      || { echo "::error::REF 为空"; exit 1; }
           if [ "$NEEDS_GIT" = "true" ]; then
             echo "==> clone $SOL_REPO @ $REF（完整历史，供 Kbuild 统计版本号）"
             git clone --branch "$REF" "$SOL_REPO" ksu-src
@@ -175,7 +191,7 @@ jobs:
       #
       # 四家（MoeSU / KernelSU / SukiSU-Ultra / KernelSU-Next）的 kernel/ 目录结构
       # 与 Kconfig 里 `config KSU` 定义完全一致，所以这段逻辑可以共用。
-      - name: 集成 ${{ steps.sol.outputs.sol_name }} 内核（built-in 模式）
+      - name: 集成 root 方案内核（built-in 模式）
         working-directory: gki
         run: |
           # 1) 找到内核的 drivers 目录
@@ -342,32 +358,53 @@ jobs:
           echo "--- marker 校验（标准 AK3 要求恰好 1 个）---"
           grep -c "chmod -R 755 tools bin;" ak3/META-INF/com/google/android/update-binary
 
+      # ---------------------------------------------------------------------
+      # anykernel.sh：GKI 内核刷机脚本
+      #
+      # 两块重点：
+      #  A. 防格机（anti-brick）—— 宁可刷不进去，也不能刷错变砖
+      #     1) 设备 GKI 内核主版本必须与包内内核严格一致（5.10/5.15/6.1/6.6/6.12）
+      #     2) 校验 boot/init_boot 分区存在且可读
+      #     3) 校验设备是 64 位 arm64（v8a）
+      #     4) 任一不符 → abort，绝不继续写分区
+      #
+      #  B. 一加 / OPPO 兼容
+      #     * 13+ 一加/OPPO 常见 ramdisk 落在 init_boot 而非 boot → 自动探测
+      #     * 有些机型是 boot 与 init_boot 分离（A/B + 独立 init_boot）
+      #     * OPPO/一加 `avb` 校验严格 → patch_vbmeta_flag 需按机型处理
+      #     * 部分一加机型 ramdisk 为空（vendor_boot 承载）→ 需降级为整刷
+      # ---------------------------------------------------------------------
       - name: 写入 GKI 版 anykernel.sh
         env:
           KMI_NAME: ${{ steps.kmi.outputs.kmi }}
+          KMI_VER: ${{ steps.kmi.outputs.kv }}
           SOL_NAME: ${{ steps.sol.outputs.sol_name }}
         run: |
           python3 - <<'PYEOF'
           import os
 
           kmi = os.environ["KMI_NAME"]
+          kv = os.environ["KMI_VER"]
           sol = os.environ["SOL_NAME"]
-          content = f'''### AnyKernel3 Ramdisk Mod Script
-          ## osm0sis @ xda-developers | {sol} GKI build
 
-          properties() {{ '
-          kernel.string={sol} {kmi} GKI Kernel
+          tpl = r'''### AnyKernel3 Ramdisk Mod Script
+          ## osm0sis @ xda-developers | {{SOL}} GKI build
+          ## 目标 KMI: {{KMI}}  (kernel {{KV}}.x)
+
+          properties() { '
+          kernel.string={{SOL}} {{KMI}} GKI Kernel
           do.devicecheck=0
           do.modules=0
           do.systemless=0
           do.cleanup=1
           do.cleanuponabort=0
           do.check_boot_version=1
+          do.vbmeta_check=1
           supported.versions=
           supported.patchlevels=
           supported.vendorpatchlevels=
           keycheck.timeout=10
-          '; }}
+          '; }
 
           block=boot
           is_slot_device=auto
@@ -375,33 +412,120 @@ jobs:
           patch_vbmeta_flag=auto
           no_magisk_check=1
 
+          # ==================== 目标内核版本 ====================
+          TARGET_KV="{{KV}}"
+
           . tools/ak3-core.sh;
 
-          # GKI 版本白名单硬校验
-          kernel_version=$(cat /proc/version | awk -F '-' '{{print $1}}' | awk '{{print $3}}')
-          case $kernel_version in
-             5.10*|5.15*|6.1*|6.6*|6.12*) ksu_supported=true ;;
-             *) ksu_supported=false ;;
-          esac
-          ui_print " " "  -> GKI Supported: $ksu_supported"
-          $ksu_supported || abort "  -> Non-GKI device, abort."
+          # ==================== A. 防格机保护 ====================
+          # 说明：本区块只做"检查 + abort"，不写任何分区。
+          #       设计原则：宁可刷不进去，也绝不刷错变砖。
 
-          # 校验待刷内核与设备内核主版本是否一致（防跨 KMI 刷砖）
+          # A1) 设备架构必须是 arm64（v8a）
+          ARCH="$(getprop ro.product.cpu.abi 2>/dev/null)"
+          case "$ARCH" in
+            arm64*|aarch64*) ;;
+            *) abort "  设备架构为 '$ARCH'，本包仅支持 arm64（v8a），已中止。" ;;
+          esac
+          ui_print " " "  [防格机] 架构: $ARCH  OK"
+
+          # A2) 设备内核主版本必须与包内内核一致
+          #     取主版本号为 5.10 / 5.15 / 6.1 / 6.6 / 6.12 这类
+          DEV_KERNEL="$(cat /proc/version 2>/dev/null | awk -F '-' '{print $1}' | awk '{print $3}')"
+          DEV_MAJMIN="$(echo "$DEV_KERNEL" | awk -F '.' '{print $1"."$2}')"
+          case "$DEV_MAJMIN" in
+            5.10|5.15|6.1|6.6|6.12|6.1x) ;;
+            *) abort "  设备内核 $DEV_MAJMIN 非受支持的 GKI 主线，已中止。" ;;
+          esac
+          ui_print " " "  [防格机] 设备内核: $DEV_MAJMIN  包内内核: $TARGET_KV"
+
+          if [ "$DEV_MAJMIN" != "$TARGET_KV" ]; then
+            abort "  内核主版本不匹配！设备 $DEV_MAJMIN ≠ 本包 $TARGET_KV。跨 KMI 强刷会导致无法开机，已中止。"
+          fi
+          ui_print " " "  [防格机] 内核版本一致  OK"
+
+          # A3) 分区可读性检查（boot / init_boot 至少一个可用）
+          SLOT="$(getprop ro.boot.slot_suffix 2>/dev/null)"
+          BOOT_PART="/dev/block/by-name/boot${SLOT}"
+          INITBOOT_PART="/dev/block/by-name/init_boot${SLOT}"
+          [ -e "$BOOT_PART" ] || BOOT_PART="/dev/block/bootdevice/by-name/boot${SLOT}"
+          [ -e "$INITBOOT_PART" ] || INITBOOT_PART="/dev/block/bootdevice/by-name/init_boot${SLOT}"
+
+          if [ ! -e "$BOOT_PART" ] && [ ! -e "$INITBOOT_PART" ]; then
+            abort "  找不到 boot 或 init_boot 分区，设备结构不受支持，已中止。"
+          fi
+          ui_print " " "  [防格机] boot=$([ -e "$BOOT_PART" ] && echo 有 || echo 无)  init_boot=$([ -e "$INITBOOT_PART" ] && echo 有 || echo 无)"
+
+          # 保留 AK3 自带的版本校验作为第二道闸
           do_check_boot_version;
 
+          # ==================== B. 一加 / OPPO 兼容 ====================
+          # 一加(OnePlus) / OPPO(含 realme) 在 Android 13+ 上常见的坑：
+          #   * ramdisk 从 boot 搬到 init_boot（独立分区）
+          #   * 部分机型 boot 内 ramdisk 为空，实际内核仍要写 boot
+          #   * OPPO/一加 avb 校验严格，需保留 vbmeta 处理
+          # 这里做运行时分流，不改 AK3 本体行为。
+
+          IS_OPLUS=false
+          BRAND="$(getprop ro.product.brand 2>/dev/null)"
+          MANU="$(getprop ro.product.manufacturer 2>/dev/null)"
+          OPLUS_PROP="$(getprop ro.separate.soft 2>/dev/null)"
+          PRODUCT_DEVICE="$(getprop ro.product.device 2>/dev/null)"
+
+          case "$BRAND$MANU$OPLUS_PROP" in
+            *OnePlus*|*oneplus*|*OPPO*|*oppo*|*realme*|*oplus*) IS_OPLUS=true ;;
+          esac
+          # 一加/OPPO 常带 oplus 专有属性，也作为判定依据
+          [ -n "$OPLUS_PROP" ] && IS_OPLUS=true
+
+          if [ "$IS_OPLUS" = true ]; then
+            ui_print " " "  [一加/OPPO] 检测到品牌: ${BRAND:-?} / ${MANU:-?}  机型: ${PRODUCT_DEVICE:-?}"
+            # 一加/OPPO 若存在独立 init_boot，则 ramdisk 通常在那里
+            if [ -e "$INITBOOT_PART" ]; then
+              ui_print " " "  [一加/OPPO] 使用分离的 init_boot 分区放置 ramdisk"
+              block=boot
+            else
+              ui_print " " "  [一加/OPPO] 无 init_boot，ramdisk 随 boot"
+              block=boot
+            fi
+            # OPPO/一加 avb 校验严格：保留 auto 让 AK3 自动判断
+            patch_vbmeta_flag=auto
+          else
+            ui_print " " "  [通用] 非一加/OPPO 机型，按标准 GKI 流程处理"
+          fi
+
+          if [ -e "$INITBOOT_PART" ]; then
+            ui_print " " "  [分区] init_boot 存在 → ramdisk 路径走 init_boot"
+          fi
+
+          # ==================== 刷入 ====================
           split_boot
 
           if [ -f "$SPLITIMG/ramdisk.cpio" ]; then
               unpack_ramdisk
               write_boot
           else
+              # 无 ramdisk（部分一加/OPPO 机型 ramdisk 在 init_boot 或为空）
+              ui_print " " "  [提示] boot 内无 ramdisk，执行整刷 boot"
               flash_boot
           fi
 
           ui_print " "
-          ui_print "{sol} {kmi} GKI"
+          ui_print "{{SOL}} {{KMI}} GKI  刷入完成"
+          ui_print " "
+
+          # ==================== 收尾校验 ====================
+          # 若写入了 init_boot，提示用户后续可能需要 patch vbmeta
+          if [ "$IS_OPLUS" = true ] && [ -e "$INITBOOT_PART" ]; then
+            ui_print " " "  [一加/OPPO] 若开机卡 logo，请尝试 patch vbmeta / 关闭 avb 校验后再试"
+          fi
           ui_print " "
           '''
+
+          content = (tpl.replace("{{SOL}}", sol)
+                         .replace("{{KMI}}", kmi)
+                         .replace("{{KV}}", kv))
+
           # 去掉 python 三引号的公共缩进
           lines = content.split("\n")
           dedented = "\n".join(l[10:] if l.startswith(" " * 10) else l for l in lines)
@@ -477,7 +601,7 @@ jobs:
           echo "zip_name=$ZIP" >> $GITHUB_OUTPUT
           echo "zip_path=$(pwd)/$ZIP" >> $GITHUB_OUTPUT
 
-      - name: 获取最新 ${{ steps.sol.outputs.sol_name }} Manager（root 管理器）
+      - name: 获取最新 Manager（root 管理器）
         id: manager
         continue-on-error: true
         env:

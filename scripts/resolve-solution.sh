@@ -27,7 +27,7 @@ if [ ! -f "$SOLUTION_CONFIG" ]; then
 fi
 
 "$PY" - "$SOLUTION_CONFIG" "$ROOT_SOLUTION" <<'PYEOF'
-import json, sys
+import json, os, sys
 
 cfg_path, want = sys.argv[1], sys.argv[2]
 cfg = json.load(open(cfg_path, encoding="utf-8"))
@@ -70,7 +70,17 @@ out = {
     "mgr_pkgs": ",".join(m.get("package_whitelist", []) or []),
 }
 
+out_file = os.environ.get("GITHUB_OUTPUT", "")
+lines = []
 for k, v in out.items():
     v = str(v).replace("\n", " ").replace("\r", "")
-    print("%s=%s" % (k, v))
+    lines.append("%s=%s" % (k, v))
+
+text = "\n".join(lines) + "\n"
+if out_file:
+    with open(out_file, "a", encoding="utf-8") as f:
+        f.write(text)
+else:
+    # 本地调试：没有 GITHUB_OUTPUT 时打到 stdout
+    sys.stdout.write(text)
 PYEOF

@@ -89,7 +89,7 @@ AOSP kernel/common @ <kmi>-lts
         └─ 抓最新 Manager APK（Actions artifact 或 GitHub Release）
 ```
 
-## 四个关键实现细节
+## 六个关键实现细节
 
 ### 1. 多数方案必须完整克隆（不能 `--depth=1`）
 
@@ -195,7 +195,36 @@ bool is_manager_apk(char *path)
 所以打包后 workflow 会做一次自检（`unzip -Z1` 列条目 → 逐项断言），
 避免生成"刷不进去"的包。
 
-## 编译时长
+### 5. 防格机保护（anti-brick）
+
+生成的 `anykernel.sh` 在**写任何分区之前**做三重闸门检查，任一不符即 `abort`：
+
+| 闸门 | 检查 | 不符后果 |
+|---|---|---|
+| A1 架构 | `ro.product.cpu.abi` 必须是 `arm64*` / `aarch64` | 直接中止 |
+| A2 内核主版本 | 设备 `/proc/version` 的主版本号必须**等于**包内内核（5.10 / 5.15 / 6.1 / 6.6 / 6.12） | 直接中止 |
+| A3 分区 | `boot` 或 `init_boot` 至少一个存在且可读 | 直接中止 |
+
+设计原则是**宁可刷不进去，也绝不刷错变砖**。AK3 自带的 `do_check_boot_version`
+作为第二道闸保留。A2 是最关键的一条 —— 跨 KMI（例如把 `android15-6.6` 的包刷到
+6.1 的设备上）会导致无法开机，这里会提前拦下来。
+
+### 6. 一加 / OPPO 兼容
+
+一加（OnePlus）与 OPPO（含 realme）在 Android 13+ 的 GKI 机型上有几个共性坑，
+脚本里做了运行时分流：
+
+- **独立 `init_boot` 分区**：13+ 一加/OPPO 常把 ramdisk 从 `boot` 搬到 `init_boot`，
+  脚本会探测 `init_boot` 是否存在并相应提示；`boot` 内无 ramdisk 时降级为整刷。
+- **品牌探测**：同时看 `ro.product.brand` / `ro.product.manufacturer` /
+  `ro.separate.soft`（OPPO 系专有属性），命中 `OnePlus` / `OPPO` / `realme` / `oplus`
+  即进入兼容分支。
+- **AVB / vbmeta**：OPPO/一加 校验较严，`patch_vbmeta_flag=auto` 保留给 AK3 自动判断；
+  脚本末尾会提示"若开机卡 logo 可尝试 patch vbmeta / 关闭 avb 校验"。
+- **A/B 槽位**：`is_slot_device=auto` + 分区路径自动拼 `ro.boot.slot_suffix`。
+
+> 兼容逻辑只做**分流与提示**，不修改 AK3 本体行为，因此对非一加/OPPO 机型无副作用。
+
 
 **单个 KMI 约 40–150 分钟**（取决于 runner 与是否开 SUSFS）。
 本流程设计为**一次一个方案 / 一个 KMI**，避免大批量 CI 触发 GitHub 风控。
