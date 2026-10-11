@@ -1,4 +1,17 @@
 # 让 Windows 提交也保持 LF，避免 shell 脚本在 runner 上因 CRLF 报错
+#
+# ⚠️ 注意：本仓库用 GitHub Git Data API 推送（api.github.com 可达，git push 不可达），
+#    API 直接推 blob，【完全绕过下面这些 eol 过滤器】—— filter 只在 git 客户端
+#    checkout/commit 时生效。所以：
+#      · 推送脚本 _work/push_api.py 内置 normalize()，按扩展名强制 CRLF -> LF；
+#      · workflow 第一步再兜一次底：
+#          find scripts -name '*.sh' -exec sed -i 's/\r$//' {} +
+#    本文件的作用是「万一以后改用 git push」时的保险，不是当前推送路径的保险。
+#
+#    历史教训：resolve-solution.sh 曾以 CRLF 进库，Ubuntu runner 上
+#    set -euo pipefail 末尾的 \r 被判为非法选项 -> exit 2，整条流水线挂掉。
+#    （本地 Git Bash 对 \r 宽容，复现不了。）
+
 * text=auto eol=lf
 *.sh text eol=lf
 *.yml text eol=lf
