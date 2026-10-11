@@ -79,6 +79,7 @@ jobs:
 
       # 把「多方案差异」从 workflow 里抽干净：repo / 默认分支 / Manager 来源 /
       # 包名白名单 / 版本算法全部来自 config/root-solutions.json。
+      # 注意：本步骤不能读取自己的 outputs（GitHub 语义），校验放到下一步。
       - name: 解析 root 方案配置
         id: sol
         env:
@@ -90,17 +91,32 @@ jobs:
           echo "方案        : ${{ inputs.root_solution }}"
           cat "$SOLUTION_CONFIG"
 
-          # 硬断言：解析必须真的产出输出。漏写 $GITHUB_OUTPUT 会让下游拿到空字符串，
-          # 表现为 shell 报 "The empty string is not a valid path" 这种难查的错误。
-          for k in sol_id sol_name sol_repo sol_ref sol_needs_git sol_version_formula mgr_repo mgr_pkgs; do
-            v="$(printf '%s' '${{ toJSON(steps.sol.outputs) }}' | grep -o "\"$k\":\"[^\"]*\"" | head -1)"
-            echo "  assert $k -> ${v:-<missing>}"
-          done
-          [ -n "${{ steps.sol.outputs.sol_repo }}" ] \
-            || { echo "::error::sol_repo 为空：resolve-solution.sh 未写入 GITHUB_OUTPUT"; exit 1; }
-          [ -n "${{ steps.sol.outputs.sol_name }}" ] \
-            || { echo "::error::sol_name 为空：resolve-solution.sh 未写入 GITHUB_OUTPUT"; exit 1; }
-          echo "OK: 方案输出已就绪 (sol_name=${{ steps.sol.outputs.sol_name }})"
+      # 硬断言：解析必须真的产出输出。漏写 $GITHUB_OUTPUT 会让下游拿到空字符串，
+      # 表现为 shell 报 "The empty string is not a valid path" 这种难查的错误。
+      - name: 校验方案输出
+        run: |
+          SOL_NAME="${{ steps.sol.outputs.sol_name }}"
+          SOL_REPO="${{ steps.sol.outputs.sol_repo }}"
+          SOL_REF="${{ steps.sol.outputs.sol_ref }}"
+          SOL_GIT="${{ steps.sol.outputs.sol_needs_git }}"
+          SOL_FORMULA="${{ steps.sol.outputs.sol_version_formula }}"
+          MGR_REPO="${{ steps.sol.outputs.mgr_repo }}"
+          MGR_PKGS="${{ steps.sol.outputs.mgr_pkgs }}"
+
+          printf '%-16s = %s\n' \
+            sol_name "$SOL_NAME" \
+            sol_repo "$SOL_REPO" \
+            sol_ref "$SOL_REF" \
+            sol_needs_git "$SOL_GIT" \
+            sol_version_formula "$SOL_FORMULA" \
+            mgr_repo "$MGR_REPO" \
+            mgr_pkgs "$MGR_PKGS"
+
+          [ -n "$SOL_NAME" ] || { echo "::error::sol_name 为空：resolve-solution.sh 未写入 GITHUB_OUTPUT"; exit 1; }
+          [ -n "$SOL_REPO" ] || { echo "::error::sol_repo 为空：resolve-solution.sh 未写入 GITHUB_OUTPUT"; exit 1; }
+          [ -n "$SOL_REF" ]  || { echo "::error::sol_ref 为空：resolve-solution.sh 未写入 GITHUB_OUTPUT"; exit 1; }
+          case "$SOL_GIT" in true|false) ;; *) echo "::error::sol_needs_git 非法: '$SOL_GIT'"; exit 1 ;; esac
+          echo "OK: 方案输出已就绪（$SOL_NAME）"
 
       - name: 输出构建参数
         run: |
