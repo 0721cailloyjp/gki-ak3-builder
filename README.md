@@ -6,7 +6,7 @@
 
 | id | 项目 | 仓库 | ★ | 默认分支 | Manager 包名 |
 |---|---|---|---|---|---|
-| `moesu` | **MoeSU**（原 FolkSU） | `LyraVoid/MoeSU` | 35 | `master` | `me.yuki.folksu` |
+| `finasu` | **FinaSU**（原 FolkSU / MoeSU） | `LyraVoid/FinaSU` | 36 | `master` | `me.yuki.fina` |
 | `kernelsu` | **KernelSU** | `tiann/KernelSU` | 19k+ | `main` | `me.weishu.kernelsu` |
 | `sukisu` | **SukiSU-Ultra** | `SukiSU-Ultra/SukiSU-Ultra` | 6.5k+ | `main` | `com.sukisu.ultra` |
 | `kernelsu-next` | **KernelSU-Next** | `KernelSU-Next/KernelSU-Next` | 4.4k+ | `dev` | `com.rifsxd.ksunext` |
@@ -17,8 +17,16 @@
 > 差异（仓库地址、默认分支、版本算法、Manager 获取方式、包名白名单）全部抽到
 > [`config/root-solutions.json`](config/root-solutions.json)，workflow 只是消费它。
 
-> **改名说明（MoeSU）**：项目原地址 `LyraVoid/FolkSU` 已于 2026-10 改名为 **`LyraVoid/MoeSU`**
-> （同一仓库，旧地址仍会 301 重定向）。上游计划下一个版本把 Manager 展示名改为 **`moesu`**。
+> **改名说明（FinaSU）**：项目是 **KernelSU fork**，仓库名经**三次改名**，但一直是
+> 同一个仓库（id `1147947994`），旧地址均 301 重定向：
+>
+> | 时期 | 仓库 | Manager 展示名 | Manager 包名 |
+> |---|---|---|---|
+> | 最初 | `LyraVoid/FolkSU` | FolkSU | `me.yuki.folksu` |
+> | 2026-10 上旬 | `LyraVoid/MoeSU` | FolkSU | `me.yuki.folksu` |
+> | **现在** | **`LyraVoid/FinaSU`** | **FinaSU** | **`me.yuki.fina`** |
+>
+> **签名证书始终未变**（`c371061b...`），所以内核只按签名信任 → 跨版本 Manager 始终可用。
 
 ## 这是什么
 
@@ -47,7 +55,7 @@
 ## 怎么用
 
 1. 进 **Actions** → **Build GKI Kernel + AnyKernel3** → **Run workflow**
-2. 选 **root 方案**（`moesu` / `kernelsu` / `sukisu` / `kernelsu-next`）
+2. 选 **root 方案**（`finasu` / `kernelsu` / `sukisu` / `kernelsu-next`）
 3. 选 **KMI**（例如 `android15-6.6`）
 4. 按需开 **SUSFS**
 5. 跑完在 **Releases** 下载：
@@ -62,7 +70,7 @@
 | `root_solution` | root 方案，必填（4 选 1） |
 | `kmi` | 目标 KMI，必填 |
 | `kernel_branch` | AOSP 分支，留空 = `<kmi>-lts`；也可填 `android15-6.6-2026-10` |
-| `solution_ref` | root 源码引用，留空 = 配置里的默认分支（MoeSU `master` / KernelSU `main` / SukiSU `main` / KSU-Next `dev`） |
+| `solution_ref` | root 源码引用，留空 = 配置里的默认分支（FinaSU `master` / KernelSU `main` / SukiSU `main` / KSU-Next `dev`） |
 | `enable_susfs` | 集成 SUSFS 内核补丁 |
 | `skip_on_patch_failure` | 补丁失败时跳过（不中断构建） |
 | `make_release` | 成功后创建 Release |
@@ -100,7 +108,7 @@ KSU_VERSION = 30000 + $(git rev-list --count HEAD)
 ```
 
 浅克隆会让 commit 计数退化成 `1` → `KSU_VERSION=30001`，与真实值不符，
-管理器会提示"**需要更新内核**"。实测 MoeSU 当前 master 为 **2792** 个提交 → `KSU_VERSION=32792`，
+管理器会提示"**需要更新内核**"。实测 FinaSU 当前 master 为 **2794** 个提交 → `KSU_VERSION=32794`，
 与官方 Manager APK 文件名里的 `_32792` 完全吻合。
 
 **例外：SukiSU-Ultra** 的算法不同：
@@ -160,15 +168,19 @@ bool is_manager_apk(char *path)
 
 这也是**一个内核能跨 4 个方案识别管理器**的原因：不固化包名，只按签名信任。
 
-**已知的上游变更（MoeSU）**：下一个版本 Manager **改名为 `moesu`**，
-包名从 `me.yuki.folksu` 改为 `me.yuki.moesu`，**签名证书不变**。
-因为本流程不固化包名，改名的**新** Manager 刷到本流程编译的**旧**内核上
-依然会被识别为可信管理器。
+**已发生的上游变更（FinaSU）**：Manager 已从 `FolkSU` / `me.yuki.folksu` 改名为
+**`FinaSU`** / **`me.yuki.fina`**（PR 构建为 `me.yuki.fina.pr`），**签名证书不变**。
+因为本流程不固化包名，改名后的**新** Manager 刷到本流程编译的**旧**内核上
+依然会被识别为可信管理器 —— **无需重新编译内核**。
 
-| 版本 | Manager 展示名 | Manager 包名 | 签名 |
+| 时期 | Manager 展示名 | Manager 包名 | 签名 |
 |---|---|---|---|
-| 当前 | FolkSU | `me.yuki.folksu` | 不变 |
-| 下一版 | **moesu** | `me.yuki.moesu` | **不变** |
+| 最初（FolkSU） | FolkSU | `me.yuki.folksu` | — |
+| 过渡（MoeSU） | FolkSU | `me.yuki.folksu` | 不变 |
+| **现在（FinaSU）** | **FinaSU** | **`me.yuki.fina`** | **不变** |
+
+> 包名白名单里同时保留了 `me.yuki.fina*` 与历史 `me.yuki.folksu*` / `me.yuki.moesu*`，
+> 所以无论抓到的是哪个时期的 Manager APK 都能正确识别，不会因改名而误报。
 
 > 包名相关的引用全在用户态，与内核构建无关：
 > `manager/app/build.gradle.kts`（`defaultManagerPackageName` / `defaultManagerName` /
@@ -234,7 +246,7 @@ bool is_manager_apk(char *path)
 | 组件 | 来源 |
 |---|---|
 | 内核基座 | `android.googlesource.com/kernel/common` |
-| Root 内核 | `LyraVoid/MoeSU`、`tiann/KernelSU`、`SukiSU-Ultra/SukiSU-Ultra`、`KernelSU-Next/KernelSU-Next` |
+| Root 内核 | `LyraVoid/FinaSU`、`tiann/KernelSU`、`SukiSU-Ultra/SukiSU-Ultra`、`KernelSU-Next/KernelSU-Next` |
 | Manager APK | 各项目自己的 Actions / Release |
 | SUSFS | `ShirkNeko/susfs4ksu` |
 | AK3 框架 | `WildKernels/AnyKernel3@gki-2.0` |
@@ -270,4 +282,4 @@ bool is_manager_apk(char *path)
 
 ## License
 
-构建脚本：MIT。集成产物受各上游许可约束（MoeSU / KernelSU 等均为 GPL-3.0，AK3 见其 LICENSE）。
+构建脚本：MIT。集成产物受各上游许可约束（FinaSU / KernelSU 等均为 GPL-3.0，AK3 见其 LICENSE）。

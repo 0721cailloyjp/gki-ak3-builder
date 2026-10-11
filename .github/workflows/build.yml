@@ -8,10 +8,10 @@ on:
         description: "root 方案（KSU 系列，均为正式主流项目）"
         required: true
         type: choice
-        default: moesu
+        default: finasu
         options:
           # 与 config/root-solutions.json 的 solutions[].id 一一对应
-          - moesu
+          - finasu
           - kernelsu
           - sukisu
           - kernelsu-next
@@ -371,7 +371,8 @@ jobs:
           #   然后才比对签名
           # 即「包名校验」与「签名校验」是 AND 关系。
           #
-          # 上游已确定把 Manager 包名从 me.yuki.folksu 改为 me.yuki.moe / moesu
+          # 上游已把 Manager 包名从 me.yuki.folksu 改成 me.yuki.fina
+          # （仓库也随之改名 LyraVoid/MoeSU → LyraVoid/FinaSU）。
           # （签名证书不变）。若这里固化了包名，改名后内核将不再识别新 Manager。
           # 因此保持不定义，让内核只按签名信任 —— 签名不变则跨版本始终可用。
           # 如需手动指定，用 make 命令行传：KSU_MANAGER_PACKAGE=<包名>
@@ -708,9 +709,9 @@ jobs:
           echo "==> 方案: $SOL_NAME"
           echo "==> 已知包名集合: $PKGS"
 
-          # 1) 打印包名 —— 上游计划把 Manager 从 FolkSU(me.yuki.folksu)
-          #    改名为 moesu。签名证书不变。内核只按签名信任，所以包名/展示名
-          #    变化不影响可用性，这里只做记录 + 白名单提示。
+          # 1) 打印包名 —— 上游已把 Manager 从 FolkSU(me.yuki.folksu) 改名为
+          #    FinaSU(me.yuki.fina)。签名证书不变。内核只按签名信任，所以
+          #    包名/展示名变化不影响可用性，这里只做记录 + 白名单提示。
           if command -v aapt2 >/dev/null 2>&1 || [ -n "${ANDROID_HOME:-}" ]; then
             AAPT="$(command -v aapt2 || echo "${ANDROID_HOME:-}/build-tools/$(ls "${ANDROID_HOME:-}/build-tools" 2>/dev/null | sort -V | tail -1)/aapt2")"
             if [ -x "$AAPT" ]; then
