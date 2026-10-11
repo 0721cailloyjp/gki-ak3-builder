@@ -48,6 +48,15 @@ on:
         required: true
         type: boolean
         default: true
+      kernel_tweaks:
+        description: "内核调优档位（none=原样 / safe=只加能力不改默认 / smart=改默认算法，详见 config/kernel-tweaks.json）"
+        required: true
+        type: choice
+        default: safe
+        options:
+          - none
+          - safe
+          - smart
       make_release:
         description: "构建成功后创建 Release"
         required: true
@@ -126,6 +135,7 @@ jobs:
           echo "solution ref  : ${{ inputs.solution_ref || '(配置默认)' }}"
           echo "SUSFS         : ${{ inputs.enable_susfs }}"
           echo "skip on fail  : ${{ inputs.skip_on_patch_failure }}"
+          echo "内核调优      : ${{ inputs.kernel_tweaks }}"
 
       - name: 解析 KMI 参数
         id: kmi
@@ -391,11 +401,28 @@ jobs:
           # 内核侧符号解析
           scripts/config --file .config -e KALLSYMS -e KALLSYMS_ALL || true
 
+          # --- 内核调优（网络/存储/CPU功耗/内存/编译精简）---
+          # 重要：这些【不是】KernelSU/SUSFS 的功能开关。
+          # 上游 FinaSU 的 kernel/Kconfig 与 SUSFS 补丁内都没有任何网络/功耗项，
+          # 下面全部是内核自身 defconfig 层面的调优，与 root 功能互不影响。
+          # 必须在 olddefconfig 之前执行，否则会被 Kconfig 依赖关系重置。
+          echo "==> 应用内核调优（档位: ${{ inputs.kernel_tweaks }}）"
+          # 本步骤 working-directory 为 gki/，调优脚本与清单都在仓库根（GITHUB_WORKSPACE）下。
+          TWEAK_SH="$GITHUB_WORKSPACE/scripts/apply-tweaks.sh"
+          TWEAK_CFG="$GITHUB_WORKSPACE/config/kernel-tweaks.json"
+          chmod +x "$TWEAK_SH" || true
+          bash "$TWEAK_SH" "${{ inputs.kernel_tweaks }}" ./.config "$TWEAK_CFG"
+
           echo "==> olddefconfig 归一化"
           make ARCH=arm64 $LLVM_MAKE_ARGS olddefconfig
 
           echo "==> 最终关键配置"
           grep -E "^CONFIG_(KSU|KPROBES|EXT4_FS|LTO)" .config || true
+          echo "--- 调优生效情况 ---"
+          for sym in DEFAULT_TCP_CONG_BBR DEFAULT_FQ_CODEL IOSCHED_BFQ DEFAULT_BFQ \
+                     CPU_FREQ_GOV_SCHEDUTIL ZRAM ZRAM_DEF_COMP_LZ4 DEBUG_INFO_NONE; do
+            grep -E "^(# )?CONFIG_${sym}[= ]" .config || echo "  (无 $sym)"
+          done
           echo "--- 断言 CONFIG_KSU 生效 ---"
           grep -qE '^CONFIG_KSU=y' .config || grep -qE '^CONFIG_KSU=m' .config \
             || { echo "::error::CONFIG_KSU 未生效，集成失败"; exit 1; }
@@ -769,6 +796,7 @@ jobs:
             echo "| AOSP branch | \`${{ steps.kmi.outputs.branch }}\` |"
             echo "| 源码 ref | \`${{ inputs.solution_ref || steps.sol.outputs.sol_ref }}\` |"
             echo "| SUSFS | \`${{ inputs.enable_susfs }}\` |"
+            echo "| 内核调优 | \`${{ inputs.kernel_tweaks }}\` |"
             echo "| Manager 版本 | \`${{ steps.manager.outputs.manager_version || '未获取' }}\` |"
             echo "| Manager versionCode | \`${{ steps.manager.outputs.manager_version_code || '-' }}\` |"
             echo ""

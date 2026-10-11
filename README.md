@@ -58,10 +58,11 @@
 2. 选 **root 方案**（`finasu` / `kernelsu` / `sukisu` / `kernelsu-next`）
 3. 选 **KMI**（例如 `android15-6.6`）
 4. 按需开 **SUSFS**
-5. 跑完在 **Releases** 下载：
+5. 按需选 **内核调优档位**（`none` / `safe` / `smart`，默认 `safe`）
+6. 跑完在 **Releases** 下载：
    - `<方案名>-<KMI>-GKI-AnyKernel3.zip` — 内核刷机包
    - `<方案名>-Manager-<版本>.apk` — 配套管理器
-6. 先刷内核 zip，再装 Manager APK
+7. 先刷内核 zip，再装 Manager APK
 
 ### 输入项
 
@@ -73,8 +74,51 @@
 | `solution_ref` | root 源码引用，留空 = 配置里的默认分支（FinaSU `master` / KernelSU `main` / SukiSU `main` / KSU-Next `dev`） |
 | `enable_susfs` | 集成 SUSFS 内核补丁 |
 | `skip_on_patch_failure` | 补丁失败时跳过（不中断构建） |
+| `kernel_tweaks` | 内核调优档位，见下节；默认 `safe` |
 | `make_release` | 成功后创建 Release |
 | `release_tag` | 自定义 tag，留空自动生成 |
+
+## 内核调优档位（`kernel_tweaks`）
+
+> **先说清楚**：这一节的内容**不是** KernelSU / SUSFS 的功能。
+> 我逐条读过上游 FinaSU 的 `kernel/Kconfig`（只有 6 个 `KSU*` 项）和 SUSFS 补丁
+> （只有 11 个 `KSU_SUSFS_*` 项，全是「隐藏/伪装」类）——**两边都没有任何网络或功耗相关开关**。
+> 「优化网络功耗」只能在内核自身的 defconfig 层面做，所以有了这个档位。
+
+完整清单在 [`config/kernel-tweaks.json`](config/kernel-tweaks.json)，共 58 条，分五组：
+网络 / 存储 / CPU·功耗 / 内存 / 编译精简。三档语义：
+
+| 档位 | 做什么 | 风险 |
+|---|---|---|
+| `none` | 完全不动，保持 AOSP GKI 原样 | 无 |
+| `safe` | **只启用可选能力，不改任何默认值**。只是把 BBR、fq_codel、BFQ、各种调频器等编译进内核，开机默认行为一字不变，需用户手动切换才生效 | 理论为零 |
+| `smart` | 在 `safe` 之上，把更优算法设为**系统默认**（BBR / fq_codel / schedutil / BFQ），并调 `MMC_BLOCK_MINORS` | 改变默认行为 |
+
+`safe` 档典型内容（44 条）：
+
+| 组 | 代表项 | 作用 |
+|---|---|---|
+| 网络 | `TCP_CONG_BBR`、`NET_SCH_FQ_CODEL`、`NET_SCH_CAKE`、`NET_CLS_BPF` | 弱网吞吐、降延迟、支持流量工具 |
+| 存储 | `IOSCHED_BFQ`、`MQ_IOSCHED_KYBER` | 交互优先调度，滑动跟手 |
+| CPU·功耗 | `CPU_FREQ_GOV_SCHEDUTIL`、`CPU_BOOST` | 能耗感知调频，点击响应 |
+| 内存 | `ZRAM`、`CRYPTO_LZ4`、`CRYPTO_ZSTD` | 内存压缩交换，低内存防卡顿 |
+| 编译精简 | `DEBUG_INFO_NONE`、`DEBUG_LIST` 关闭 | Image 体积降 30%~50% |
+
+`smart` 档额外内容（14 条）：把 `DEFAULT_TCP_CONG_BBR` / `DEFAULT_FQ_CODEL` /
+`DEFAULT_BFQ` / `DEFAULT_SCHEDUTIL` 打开，同时关掉互斥的旧默认项
+（`DEFAULT_TCP_CONG_CUBIC` / `DEFAULT_FQ` / `DEFAULT_MQ_DEADLINE` / `DEFAULT_PERFORMANCE`），
+`ZRAM_DEF_COMP_LZ4` 设为 zram 默认算法。
+
+三条工程约束：
+
+1. **必须在 `olddefconfig` 之前执行** —— 否则选中的 `DEFAULT_*` 会被 Kconfig
+   依赖关系重置回默认值。
+2. **不存在的配置项自动跳过**。各 KMI（5.10 ~ 6.12）的 Kconfig 有差异，
+   脚本只记日志不报错，实测 44 条里通常有一半以上在某代内核上不存在。
+3. **单条失败不中断构建**。调优是锦上添花，不该拖垮主流程。
+
+> 如果刷了 `smart` 档后觉得耗电变快 / 卡顿 / 信号异常，改回 `safe` 档重新构建即可。
+> BFQ 在 UFS 4.0 设备上收益不明显，个别场景反而增加 CPU 占用。
 
 ## 构建链路
 
@@ -88,6 +132,7 @@ AOSP kernel/common @ <kmi>-lts
         ├─ susfs4ksu @ gki-<av>-<kv> (可选)
         │
         ├─ make gki_defconfig + CONFIG_KSU=y (+ 关 LTO)
+        │     └─ apply-tweaks.sh <safe|smart>（网络/功耗调优，可选）
         │
         ├─ make Image
         │
@@ -269,8 +314,10 @@ bool is_manager_apk(char *path)
 ├── .github/workflows/build.yml    # 主构建流程
 ├── config/root-solutions.json     # root 方案注册表（唯一需要改的地方）
 ├── config/kmi-matrix.json         # KMI 分支对照表
+├── config/kernel-tweaks.json      # 内核调优清单（网络/功耗/存储/内存/编译精简）
 ├── scripts/resolve-solution.sh    # 解析 root 方案配置 → workflow 输出
 ├── scripts/fetch-manager.sh       # 自动抓取最新 Manager APK
+├── scripts/apply-tweaks.sh        # 按档位把调优项写进 .config
 └── README.md
 ```
 

@@ -1,0 +1,87 @@
+{
+  "_comment": "GKI 内核 defconfig 调优清单。注意：这些【不是】KernelSU/SUSFS 的功能开关——上游 FinaSU 的 kernel/Kconfig 与 SUSFS 补丁里都没有任何网络/功耗相关配置项。本文件是内核自身 defconfig 层面的调优，属于锦上添花，与 root 功能无关、不互相影响。",
+  "_levels": {
+    "none": "不做任何调优，保持 AOSP GKI 原样",
+    "safe": "只启用「可选能力」，不改动任何默认行为。纯加法：仅仅多编译进若干算法/调度器供运行时手动选择，不改变开机默认值，不触碰硬件交互。理论上零风险。",
+    "smart": "在 safe 之上，把更优的算法设为系统默认（BBR / fq_codel / schedutil / BFQ）并做少量参数调优。有实际续航/延迟收益，但改变了默认行为。"
+  },
+
+  "safe": [
+    { "group": "网络", "config": "TCP_CONG_ADVANCED",      "action": "enable", "why": "允许多种拥塞控制共存并可在运行时切换（启用 BBR 的前提）", "risk": "无" },
+    { "group": "网络", "config": "TCP_CONG_BBR",           "action": "enable", "why": "Google 自研拥塞控制，弱网/高丢包下吞吐与延迟明显优于 cubic", "risk": "低" },
+    { "group": "网络", "config": "TCP_CONG_CUBIC",         "action": "enable", "why": "Linux 默认拥塞控制，保留作为回退", "risk": "无" },
+    { "group": "网络", "config": "TCP_CONG_WESTWOOD",      "action": "enable", "why": "对无线链路友好的传统算法", "risk": "无" },
+    { "group": "网络", "config": "TCP_CONG_VEGAS",         "action": "enable", "why": "低延迟倾向算法", "risk": "无" },
+    { "group": "网络", "config": "TCP_CONG_HTCP",          "action": "enable", "why": "高带宽长肥管道算法", "risk": "无" },
+    { "group": "网络", "config": "TCP_CONG_DCTCP",         "action": "enable", "why": "数据中心拥塞控制，部分内网/云游戏场景有用", "risk": "无" },
+    { "group": "网络", "config": "TCP_CONG_VENO",          "action": "enable", "why": "抗丢包友好算法", "risk": "无" },
+    { "group": "网络", "config": "NET_SCHED",              "action": "enable", "why": "QoS 调度框架，所有 NET_SCH_* 的父依赖", "risk": "无" },
+    { "group": "网络", "config": "NET_SCH_FQ",             "action": "enable", "why": "公平队列，BBR 的标准搭档（BBR 官方建议配 fq）", "risk": "无" },
+    { "group": "网络", "config": "NET_SCH_FQ_CODEL",       "action": "enable", "why": "抗缓冲膨胀，显著降低网络排队延迟", "risk": "无" },
+    { "group": "网络", "config": "NET_SCH_CAKE",           "action": "enable", "why": "更先进的整形算法，家用路由级效果", "risk": "无" },
+    { "group": "网络", "config": "NET_SCH_HTB",            "action": "enable", "why": "分级令牌桶，限速场景常用", "risk": "无" },
+    { "group": "网络", "config": "NET_SCH_SFB",            "action": "enable", "why": "随机公平蓝队，轻量抗膨胀", "risk": "无" },
+    { "group": "网络", "config": "NET_SCH_TBF",            "action": "enable", "why": "令牌桶过滤器", "risk": "无" },
+    { "group": "网络", "config": "NET_SCH_FQ_PIE",         "action": "enable", "why": "PIE 系列抗缓冲膨胀", "risk": "无" },
+    { "group": "网络", "config": "NET_SCH_INGRESS",        "action": "enable", "why": "入向流量整形，配合 clsact 使用", "risk": "无" },
+    { "group": "网络", "config": "NET_CLS_ACT",            "action": "enable", "why": "流量动作框架，分类器的前置依赖", "risk": "无" },
+    { "group": "网络", "config": "NET_CLS_BPF",            "action": "enable", "why": "BPF 分类器，支持流量整形/加速类工具", "risk": "无" },
+    { "group": "网络", "config": "NET_CLS_FLOWER",         "action": "enable", "why": "通用流分类，被多数流量工具依赖", "risk": "无" },
+    { "group": "网络", "config": "NET_ACT_BPF",            "action": "enable", "why": "BPF 动作，配合 cls_bpf 使用", "risk": "无" },
+    { "group": "网络", "config": "IP_NF_MANGLE",           "action": "enable", "why": "mangle 表支持，TTL/QoS 规则的基础", "risk": "无" },
+    { "group": "网络", "config": "IP_NF_TARGET_TTL",       "action": "enable", "why": "iptables TTL 目标，部分网络优化工具需要", "risk": "无" },
+
+    { "group": "存储", "config": "IOSCHED_BFQ",            "action": "enable", "why": "BFQ 调度器：交互优先+带宽公平，UI 滑动跟手感提升", "risk": "低" },
+    { "group": "存储", "config": "BFQ_GROUP_IOSCHED",      "action": "enable", "why": "BFQ 的 cgroup 分级支持", "risk": "无" },
+    { "group": "存储", "config": "MQ_IOSCHED_DEADLINE",    "action": "enable", "why": "多队列 deadline，GKI 默认，保留", "risk": "无" },
+    { "group": "存储", "config": "MQ_IOSCHED_KYBER",       "action": "enable", "why": "低开销多队列调度器，闪存设备友好", "risk": "无" },
+
+    { "group": "CPU/功耗", "config": "CPU_FREQ_GOV_SCHEDUTIL",   "action": "enable", "why": "EAS 能耗感知调频器，与调度器联动，续航核心", "risk": "无" },
+    { "group": "CPU/功耗", "config": "CPU_FREQ_GOV_PERFORMANCE", "action": "enable", "why": "性能优先调频器，供运行时切换", "risk": "无" },
+    { "group": "CPU/功耗", "config": "CPU_FREQ_GOV_POWERSAVE",   "action": "enable", "why": "省电优先调频器，供运行时切换", "risk": "无" },
+    { "group": "CPU/功耗", "config": "CPU_FREQ_GOV_ONDEMAND",    "action": "enable", "why": "经典动态调频器，部分工具依赖", "risk": "无" },
+    { "group": "CPU/功耗", "config": "CPU_FREQ_GOV_CONSERVATIVE","action": "enable", "why": "保守调频器，供运行时切换", "risk": "无" },
+    { "group": "CPU/功耗", "config": "CPU_BOOST",                "action": "enable", "why": "输入事件触发瞬时升频，点击响应更快", "risk": "低" },
+
+    { "group": "内存", "config": "ZRAM",                   "action": "enable", "why": "内存压缩交换设备，低内存机型防卡顿关键", "risk": "无" },
+    { "group": "内存", "config": "ZSMALLOC",               "action": "enable", "why": "zram 的分配器", "risk": "无" },
+    { "group": "内存", "config": "CRYPTO_LZ4",             "action": "enable", "why": "LZ4 无损压缩，zram 内存压缩的基础算法", "risk": "无" },
+    { "group": "内存", "config": "CRYPTO_LZ4HC",           "action": "enable", "why": "LZ4 高压缩比模式", "risk": "无" },
+    { "group": "内存", "config": "CRYPTO_ZSTD",            "action": "enable", "why": "Zstd 压缩，zram 备选算法，压缩比优于 LZ4", "risk": "无" },
+
+    { "group": "编译精简", "config": "DEBUG_INFO_NONE",    "action": "enable", "why": "启用「不生成调试信息」选项 —— Image 体积可降 30%~50%", "risk": "无" },
+    { "group": "编译精简", "config": "DEBUG_INFO_DWARF5",  "action": "disable", "why": "关闭 DWARF5 调试格式（显式关闭，避免默认值干扰）", "risk": "无" },
+    { "group": "编译精简", "config": "GDB_SCRIPTS",        "action": "disable", "why": "关闭 GDB 脚本生成", "risk": "无" },
+    { "group": "编译精简", "config": "FRAME_WARN",         "action": "disable", "why": "关闭栈帧告警，减少编译噪音", "risk": "无" },
+    { "group": "编译精简", "config": "DEBUG_LIST",         "action": "disable", "why": "关闭链表完整性检查，减少热点路径开销", "risk": "低" },
+    { "group": "编译精简", "config": "DEBUG_OBJECTS",      "action": "disable", "why": "关闭内核对象生命周期调试", "risk": "无" }
+  ],
+
+  "smart": [
+    { "group": "网络", "config": "DEFAULT_TCP_CONG_BBR",   "action": "enable",  "why": "把 BBR 设为系统默认拥塞控制（safe 档只是编译进去，这里才是真正启用）", "risk": "中" },
+    { "group": "网络", "config": "DEFAULT_TCP_CONG_CUBIC", "action": "disable", "why": "退位让 BBR 成为默认（cubic 仍编译在，可运行时切回）", "risk": "低" },
+    { "group": "网络", "config": "DEFAULT_FQ_CODEL",       "action": "enable",  "why": "把 fq_codel 设为默认队列规则，全局降低缓冲膨胀延迟", "risk": "中" },
+    { "group": "网络", "config": "DEFAULT_FQ",             "action": "disable", "why": "避免与 fq_codel 默认冲突（二选一，这里选 fq_codel）", "risk": "低" },
+    { "group": "网络", "config": "DEFAULT_PFIFO_FAST",     "action": "disable", "why": "避免回退到最朴素的 pfifo_fast", "risk": "低" },
+
+    { "group": "存储", "config": "DEFAULT_BFQ",            "action": "enable",  "why": "把 BFQ 设为开机默认 IO 调度器（safe 档只是可用）", "risk": "中" },
+    { "group": "存储", "config": "DEFAULT_MQ_DEADLINE",    "action": "disable", "why": "让位给 BFQ 作为默认", "risk": "低" },
+    { "group": "存储", "config": "DEFAULT_KYBER",          "action": "disable", "why": "避免与 BFQ 默认冲突", "risk": "低" },
+
+    { "group": "CPU/功耗", "config": "DEFAULT_SCHEDUTIL",  "action": "enable",  "why": "把 schedutil 设为默认调频器，与 EAS 联动，能效最优", "risk": "中" },
+    { "group": "CPU/功耗", "config": "DEFAULT_PERFORMANCE","action": "disable", "why": "避免开机锁高频（费电）", "risk": "低" },
+
+    { "group": "内存", "config": "ZRAM_DEF_COMP_LZ4",      "action": "enable",  "why": "zram 默认用 LZ4：压缩/解压最快，CPU 开销最低", "risk": "低" },
+    { "group": "内存", "config": "ZRAM_DEF_COMP_LZ4HC",    "action": "disable", "why": "避免与 LZ4 默认冲突", "risk": "低" },
+    { "group": "内存", "config": "ZRAM_DEF_COMP_ZSTD",     "action": "disable", "why": "避免与 LZ4 默认冲突（需要更高压缩比可手动改回）", "risk": "低" },
+    { "group": "内存", "config": "MMC_BLOCK_MINORS",       "action": "set", "value": "8", "why": "存储分区上限提高到 8，多分区设备兼容性更好", "risk": "低" }
+  ],
+
+  "_notes": [
+    "action 语义：enable = scripts/config -e；disable = scripts/config -d；set = scripts/config --set-val。",
+    "不存在的配置项会被自动跳过（各 KMI 版本存在性有差异），只记日志不报错、不中断构建。",
+    "safe 档全部是「只加能力、不改默认」，符合『宁可少优化，也绝不引入不稳定』的原则。",
+    "smart 档改变了默认行为。若刷入后出现异常（耗电变快 / 卡顿 / 信号异常），改回 safe 档重新构建即可。",
+    "以上均为内核原生调优项，与 KernelSU / SUSFS 无任何关系，也不影响 root 功能与防格机逻辑。"
+  ]
+}
