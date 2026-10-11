@@ -1,44 +1,78 @@
-# GKI Kernel Build — KSU 系列自动构建
+<div align="center">
 
-自动化构建 **KSU 系列 root 方案** 的 GKI 内核 + AnyKernel3 刷机包 + 配套 root 管理器。
+# GKI Kernel Build
 
-支持 4 个**正式主流**项目（全部有公开仓库、持续维护、社区规模大，非来源不明的小项目）：
+### 在线构建 GKI 内核（Root 内置）
 
-| id | 项目 | 仓库 | ★ | 默认分支 | Manager 包名 |
-|---|---|---|---|---|---|
-| `finasu` | **FinaSU**（原 FolkSU / MoeSU） | `LyraVoid/FinaSU` | 36 | `master` | `me.yuki.fina` |
-| `kernelsu` | **KernelSU** | `tiann/KernelSU` | 19k+ | `main` | `me.weishu.kernelsu` |
-| `sukisu` | **SukiSU-Ultra** | `SukiSU-Ultra/SukiSU-Ultra` | 6.5k+ | `main` | `com.sukisu.ultra` |
-| `kernelsu-next` | **KernelSU-Next** | `KernelSU-Next/KernelSU-Next` | 4.4k+ | `dev` | `com.rifsxd.ksunext` |
+**FinaSU / KernelSU / SukiSU-Ultra / KernelSU-Next + SUSFS**
 
-> 为什么能共用一套流程？实测四家的 `kernel/Kconfig` 里 `config KSU` 定义**逐字节相同**
-> （`tristate` + `depends on KPROBES && EXT4_FS` + `default y`），`kernel/` 目录结构也一致
-> （`Kbuild` / `Kconfig` / `setup.sh` + `core/ feature/ hook/ infra/ manager/ policy/ runtime/ selinux/ sulog/ supercall/`）。
-> 差异（仓库地址、默认分支、版本算法、Manager 获取方式、包名白名单）全部抽到
-> [`config/root-solutions.json`](config/root-solutions.json)，workflow 只是消费它。
+选择方案与机型，云端编译，产物直接刷入
 
-> **改名说明（FinaSU）**：项目是 **KernelSU fork**，仓库名经**三次改名**，但一直是
-> 同一个仓库（id `1147947994`），旧地址均 301 重定向：
->
-> | 时期 | 仓库 | Manager 展示名 | Manager 包名 |
-> |---|---|---|---|
-> | 最初 | `LyraVoid/FolkSU` | FolkSU | `me.yuki.folksu` |
-> | 2026-10 上旬 | `LyraVoid/MoeSU` | FolkSU | `me.yuki.folksu` |
-> | **现在** | **`LyraVoid/FinaSU`** | **FinaSU** | **`me.yuki.fina`** |
->
-> **签名证书始终未变**（`c371061b...`），所以内核只按签名信任 → 跨版本 Manager 始终可用。
+[![Build](https://github.com/0721cailloyjp/gki-ak3-builder/actions/workflows/build.yml/badge.svg)](https://github.com/0721cailloyjp/gki-ak3-builder/actions/workflows/build.yml)
+[![Release](https://img.shields.io/github/v/release/0721cailloyjp/gki-ak3-builder?label=Release&style=flat-square&logo=github&logoColor=white&color=2ea44f)](https://github.com/0721cailloyjp/gki-ak3-builder/releases)
+[![KernelSU](https://img.shields.io/badge/KernelSU-Supported-5AA300?style=flat-square)](https://kernelsu.org/)
+[![SUSFS](https://img.shields.io/badge/SUSFS-Integrated-E67E22?style=flat-square)](https://gitlab.com/simonpunk/susfs4ksu)
 
-## 这是什么
+---
 
-把所选 root 方案的内核以 **built-in 模式**（`CONFIG_KSU=y`）集成进 Google GKI 内核源码，
-编译出完整 `Image`，再用 [AnyKernel3](https://github.com/WildKernels/AnyKernel3) 的 **gki-2.0**
-分支打成刷机 zip；同时自动抓取官方最新的 **Manager APK** 一并发布。
+</div>
 
-与官方 **LKM 模式**（只出 `kernelsu.ko`）不同，本流程产出的是**完整 GKI 内核**，直接刷入 `boot` 分区。
+## 快速导航
+
+- [开始构建](https://github.com/0721cailloyjp/gki-ak3-builder/actions/workflows/build.yml) — Actions → Run workflow
+- [下载产物](https://github.com/0721cailloyjp/gki-ak3-builder/releases) — 已发布的内核与管理器
+- [支持的 KMI](#支持的-kmi) — `uname -r` 对照表
+- [附加功能](#附加功能可选) — BBG 防格机 / 网络增强 / ZRAM LZ4KD
+- [注意事项](#注意事项) — 刷入前请阅读
+
+---
+
+## 最近更新
+
+> 2026-10-11
+
+1. 工作流界面中文化，输入项重新排序（基础配置在前、功能开关在后）
+2. 新增 **BBG 防格机**：拦截对基带、efisp 等关键分区的非法写入
+3. 新增 **网络增强**：BBRv3 拥塞控制、IPSet、Qdisc、CIFS
+4. 新增 **ZRAM LZ4KD 增强**：ZRAM / ZSMALLOC 编入内核，使用 LZ4KD 压缩
+5. 新增 **编译失败日志收集**：失败时自动打包诊断信息并上传 artifact
+
+> 更早：内核调优档位（`none` / `safe` / `smart`）、Android 17 支持、LKM 构建模式。
+
+---
+
+## 支持的 root 方案
+
+本项目集成 4 个持续维护的开源 root 方案，全部为完整内核方案（built-in）：
+
+| 方案 | 说明 | Manager 包名 |
+|---|---|---|
+| **FinaSU** | 原 FolkSU / MoeSU，仓库多次更名，同一项目 | `me.yuki.fina` |
+| **KernelSU** | 官方原版 | `me.weishu.kernelsu` |
+| **SukiSU-Ultra** | 功能最全，支持 KPM 内核模块 | `com.sukisu.ultra` |
+| **KernelSU-Next** | KernelSU 分支版 | `com.rifsxd.ksunext` |
+
+> **如何选择**：一般推荐 **KernelSU** 或 **SukiSU-Ultra**。
+> FinaSU 在中文社区使用较多，KernelSU-Next 相对小众。
+
+> **内核与管理器如何匹配**：内核只校验管理器**签名**，不校验包名。
+> 因此同一方案的任意版本管理器均可搭配任一版本内核使用。
+
+> **FinaSU 更名影响**：`FolkSU` → `MoeSU` → `FinaSU` 共更名三次，
+> 但**签名证书始终未变**，旧内核可继续搭配新版管理器。
+
+## 项目说明
+
+将所选 root 方案的代码以 **built-in 模式**（`CONFIG_KSU=y`）集成进 Google GKI 内核源码，
+编译出完整 `Image`，再由 [AnyKernel3](https://github.com/WildKernels/AnyKernel3) 打包为刷机 zip，
+同时自动获取配套的 Manager APK 一并发布。
+
+与官方 **LKM 模式**（仅提供 `kernelsu.ko`，由管理器运行时加载）不同，
+本流程产出**完整 GKI 内核**，直接刷入 `boot` 分区，开机即生效。
 
 ## 支持的 KMI
 
-≥ **5.10** 的全部 GKI 主线（含 Android 17）：
+覆盖 ≥ **5.10** 的全部 GKI 主线，共 9 个目标：
 
 | KMI | kernel | Android | AOSP 分支 | 备注 |
 |---|---|---|---|---|
@@ -54,159 +88,224 @@
 
 分支表见 [`config/kmi-matrix.json`](config/kmi-matrix.json)，`branch` 字段是唯一真源。
 
-### 关于 Android 17
+### 如何确定你的机型
 
-Android 版本与内核版本**不是一一对应**的，所以 A17 有两个 target：
+在 adb shell 中执行：
 
-| 你的设备 | 选哪个 KMI |
-|---|---|
-| A17 系统，`uname -r` 显示 **6.12.x** | `android17-6.12` |
-| A17 系统，`uname -r` 显示 **6.18.x** | `android17-6.18` |
+```bash
+uname -r
+```
 
-**怎么确认**：在 adb shell 里敲 `uname -r`，取前面 `主.次` 两位（如 `6.12.69` → `6.12`）。
+输出形如 `6.6.30-android15-8-gxxxx`，取前面 `主.次` 两位（即 `6.6`）。
 
-> `android17-6.12` 与 `android16-6.12` 编译产物**同源**（都用 `android16-6.12-lts` 分支），
-> 差别只在包名与 KMI 标记。所以 A17+6.12 的设备，用这两者任一都能刷。
+| 内核版本 | Android 版本 | 对应 KMI |
+|---|---|---|
+| 5.10 | 12 / 13 | `android12-5.10` / `android13-5.10` |
+| 5.15 | 13 / 14 | `android13-5.15` / `android14-5.15` |
+| 6.1 | 14 | `android14-6.1` |
+| 6.6 | 15 | `android15-6.6` |
+| 6.12 | 16 | `android16-6.12` |
+| 6.12 | 17 | `android17-6.12` |
+| 6.18 | 17 | `android17-6.18` |
 
-**SUSFS 在 Android 17 上不可用**：上游 `ShirkNeko/susfs4ksu` 目前最高只有
-`gki-android15-6.6`，**没有 6.12 也没有 6.18 分支**。开到 6.12/6.18 时工作流会
-自动检测并跳过 SUSFS（日志会明确提示），root 功能本身不受影响。
+> **Android 版本与内核版本并非一一对应。** 例如 Android 17 存在两批设备，
+> 分别使用 6.12 与 6.18 内核 —— 请以 `uname -r` 的结果为准，不要按 Android 版本推断。
+
+> **Android 17 说明**：`android17-6.12` 与 `android16-6.12` 编译产物同源
+> （均使用 `android16-6.12-lts` 分支），两者均可刷入，任选其一。
+
+> **SUSFS 在 Android 17 上不可用**：上游尚未提供 6.12 / 6.18 补丁，
+> 开启 SUSFS 时工作流会自动跳过并在日志中说明，root 功能本身不受影响。
 
 ## 怎么用
 
-1. 进 **Actions** → **Build GKI Kernel + AnyKernel3** → **Run workflow**
-2. 选 **构建模式**（`builtin` / `lkm`，见下节）
-3. 选 **root 方案**（`finasu` / `kernelsu` / `sukisu` / `kernelsu-next`）
-4. 选 **KMI**（例如 `android15-6.6`）
-5. 按需开 **SUSFS**（仅 `builtin` 生效）
-6. 按需选 **内核调优档位**（`none` / `safe` / `smart`，默认 `safe`）
-7. 跑完在 **Releases** 下载：
-   - `builtin`：`<方案名>-<KMI>-GKI-AnyKernel3.zip` — 内核刷机包
-   - `lkm`：`aarch64/<KMI>_kernelsu.ko` + `x86_64/<KMI>_kernelsu.ko` — 可加载模块
-   - `<方案名>-Manager-<版本>.apk` — 配套管理器（两种模式都有）
-8. `builtin` 先刷内核 zip 再装 Manager；`lkm` 装完 Manager 后由它自己加载 `.ko`
+### 1. 触发构建
 
-### 输入项
+进入 **Actions** 页面 → 选择 **构建内核（GKI + AnyKernel3）** → 点击 **Run workflow**。
 
-| 输入 | 说明 |
+### 2. 填写参数
+
+| 参数 | 说明 |
 |---|---|
-| `build_mode` | 构建模式，必填：`builtin`（编进内核，需刷 boot）/ `lkm`（可加载模块，不刷分区）；默认 `builtin` |
-| `root_solution` | root 方案，必填（4 选 1） |
-| `kmi` | 目标 KMI，必填 |
-| `kernel_branch` | AOSP 分支，按 `kmi-matrix.json` 的 `branch` 字段解析；也可手填 `android15-6.6-2026-10` |
-| `solution_ref` | root 源码引用，留空 = 配置里的默认分支（FinaSU `master` / KernelSU `main` / SukiSU `main` / KSU-Next `dev`） |
-| `enable_susfs` | 集成 SUSFS 内核补丁（**仅 `builtin` 模式生效**） |
-| `skip_on_patch_failure` | 补丁失败时跳过（不中断构建） |
-| `kernel_tweaks` | 内核调优档位，见下节；默认 `safe`（**仅 `builtin` 模式生效**） |
-| `feature_kpm` | **仅 SukiSU-Ultra**：启用 KPM 内核补丁模块。上游警告可能影响系统稳定性，默认 `false` |
-| `make_release` | 成功后创建 Release |
-| `release_tag` | 自定义 tag，留空自动生成 |
+| 构建模式 | 常规使用选 `builtin`（编入内核，需刷 boot 分区）；`lkm` 见下节 |
+| root 方案 | FinaSU / KernelSU / SukiSU-Ultra / KernelSU-Next 四选一 |
+| 机型 | 按上表选择，例如 `android15-6.6` |
+| SUSFS | 需要则开启（Android 17 不可用，会自动跳过） |
+| 内核调优 | 默认 `safe`，一般无需修改 |
+| 附加功能 | BBG 防格机 / 网络增强 / ZRAM LZ4KD，按需开启 |
+| 发布 | 开启后生成 Release，可直接下载产物 |
 
-## 方案独有的内核功能
+### 3. 下载产物
 
-四家的 `kernel/Kconfig` 定义**并不相同** —— 有些功能只有特定方案才有。2026-10-11 逐项实测：
+单次构建约需 **30 分钟至 1 小时**，完成后在 **Releases** 获取：
 
-| 内核选项 | FinaSU | KernelSU | SukiSU-Ultra | KSU-Next | 我们的处理 |
+- `<方案名>-<机型>-GKI-AnyKernel3.zip` — 内核刷机包（`builtin` 模式）
+- `<方案名>-Manager-<版本>.apk` — 配套管理器
+- `lkm` 模式下产物为 `.ko` 文件
+
+**刷入顺序：先刷内核 zip，重启开机后再安装管理器 APK。**
+
+> `lkm` 模式相反：先安装管理器，再由管理器加载 `.ko`，无需刷写分区。
+
+### 选型建议
+
+| 需求 | 建议 |
+|---|---|
+| 常规 root | 方案选 `KernelSU`，模式选 `builtin` |
+| 功能丰富 | 方案选 `SukiSU-Ultra` |
+| 不变动分区 | 模式选 `lkm` |
+| 需要隐藏 root 痕迹 | 开启 SUSFS |
+
+其余参数保持默认即可。
+
+### 完整参数列表
+
+<details>
+<summary>展开</summary>
+
+| 参数 | 说明 |
+|---|---|
+| `build_mode` | `builtin` = 编入内核（需刷 boot）/ `lkm` = 编译为 `.ko`（不刷分区）；默认 `builtin` |
+| `root_solution` | root 方案，必填（四选一） |
+| `kmi` | 机型，必填 |
+| `kernel_branch` | 内核源码分支，留空则按机型自动解析 |
+| `solution_ref` | 固定 root 源码版本，留空使用最新 |
+| `enable_susfs` | 集成 SUSFS |
+| `skip_on_patch_failure` | 补丁失败时跳过而不中断构建（不推荐） |
+| `kernel_tweaks` | 内核调优档位，默认 `safe` |
+| `feature_kpm` | 仅 SukiSU-Ultra：KPM 内核模块，默认关闭 |
+| `feature_bbg` | BBG 防格机，默认关闭 |
+| `feature_networking` | 网络增强，默认关闭 |
+| `feature_zram_lz4` | ZRAM LZ4KD 增强，默认关闭 |
+| `collect_fail_logs` | 构建失败时收集日志，默认开启 |
+| `make_release` | 构建成功后创建 Release |
+| `release_tag` | 自定义版本号，留空自动生成 |
+
+</details>
+
+## 方案差异
+
+4 个方案的内核代码并不完全一致，部分功能为特定方案独有：
+
+| 功能 | FinaSU | KernelSU | SukiSU | KSU-Next | 本项目处理 |
 |---|:-:|:-:|:-:|:-:|---|
-| `KSU` | ✅ | ✅ | ✅ | ✅ | 总是开 |
-| `KSU_DYNAMIC_MANAGER` | ✅ | — | — | — | FinaSU 下自动开 |
-| `KSU_MANUAL_SU` | — | — | ✅ | — | SukiSU 下自动开（上游 `default y`） |
-| `KPM` | — | — | ✅ | — | SukiSU 下由 `feature_kpm` 控制（默认关） |
-| `KSU_DEBUG` | ✅ | ✅ | ✅ | ✅ | 不开（调试用） |
-| `KSU_DISABLE_MANAGER` | ✅ | ✅ | ✅ | ✅ | 不开（会废掉管理器） |
-| `KSU_DISABLE_POLICY` | ✅ | ✅ | ✅ | ✅ | 不开（会废掉逐应用授权） |
-| `KSU_X86_PATCH_SYSCALL_DISPATCHER` | ✅ | ✅ | ✅ | ✅ | 仅 `X86_64` 依赖，arm64 无关 |
+| root 主体 | ✅ | ✅ | ✅ | ✅ | 全部启用 |
+| 动态管理器（更改包名不影响 root） | ✅ | — | — | — | FinaSU 自动启用 |
+| 手动提权 | — | — | ✅ | — | SukiSU 自动启用 |
+| KPM 内核模块 | — | — | ✅ | — | 需手动开启 `feature_kpm` |
+| 调试模式 | ✅ | ✅ | ✅ | ✅ | 不启用 |
+
+> 上表中的调试模式、`KSU_DISABLE_MANAGER`、`KSU_DISABLE_POLICY` 等均不启用 ——
+> 它们会禁用管理器或逐应用授权，仅供开发者排查问题。
 
 差异全部声明在 [`config/root-solutions.json`](config/root-solutions.json) 的 `kernel_features`
-字段里，workflow 不含任何方案名硬编码：
+字段，工作流中不含任何方案名硬编码。
 
-```json
-"kernel_features": {
-  "always_enable": ["KSU_MANUAL_SU"],
-  "optional": {
-    "KPM": { "default": false, "input": "feature_kpm", "risk": "high" }
-  }
-}
-```
+> <details><summary>实现说明</summary>
+>
+> **KPM**：SukiSU 独有，可在不重编内核的情况下于运行时加载 `.kpm` 补丁文件。
+> 上游说明其可能影响系统稳定性，因此默认关闭，需要时手动开启。
+>
+> **配置项检测**：判断内核编译选项是否存在，**不能依赖 `scripts/config -e` 的返回码** ——
+> 现代版本的 `scripts/config` 在符号不存在时会直接将其写入 `.config`，返回码仍为 0。
+> 本流程统一先用 `--state` 查询（返回 `undef` 表示不存在），再决定是否启用，最后回读断言。
+>
+> </details>
 
-**`KPM` 是什么**：SukiSU 的 **Kernel Patch Module** —— 允许在运行时加载 `.kpm` 文件来
-扩展/修改内核行为，不必重编内核。这是 SukiSU 的招牌能力，上游 help 同时也写明
-*"may affect system stability"*，因此本流程默认关闭，需要时手动勾选 `feature_kpm`。
+## 附加功能（可选）
 
-> ⚠️ 开关是否真的生效**不能只看 `scripts/config` 的返回码**。现代 `scripts/config` 的
-> `set_var()` 在符号不存在时会直接 `echo "CONFIG_X=y" >> .config`，返回码仍是 0。
-> 所以本流程统一先用 `--state` 判断符号是否存在（返回 `undef` 即不存在），
-> 再决定是否启用；最后还回读 `.config` 做断言。
+除 root 主体外，另提供 4 个附加功能。**默认全部关闭，且仅在 `builtin` 模式下生效**
+（`lkm` 模式不修改内核代码）。支持情况见
+[`config/kernel-extras.json`](config/kernel-extras.json)。
 
-## 构建模式：`builtin` vs `lkm`
+| 功能 | 对应参数 | 默认 | 说明 |
+|---|---|:-:|---|
+| **BBG 防格机** | `feature_bbg` | 关 | 拦截对**基带、efisp** 等关键分区的非法写入，避免误写导致设备无法开机 |
+| **网络增强** | `feature_networking` | 关 | BBRv3 拥塞控制、IPSet、Qdisc、CIFS |
+| **ZRAM LZ4KD 增强** | `feature_zram_lz4` | 关 | 将 ZRAM / ZSMALLOC 编入内核，使用 LZ4KD 压缩 |
+| **失败日志收集** | `collect_fail_logs` | **开** | 构建失败时自动打包诊断信息并上传 artifact |
 
-同一个流程支持两种交付形态，用 `build_mode` 切换。
+### KMI 支持情况
 
-| | `builtin` | `lkm` |
+补丁源并非覆盖全部内核版本，**不支持的目标会自动跳过并在日志中说明**：
+
+| 功能 | 5.10 | 5.15 | 6.1 | 6.6 | 6.12 | 6.18 |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| BBG 防格机 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 网络增强 | ✅ | ✅ | ✅ | ✅ | ⚠️ 部分 | — |
+| ZRAM LZ4KD | ✅ | ✅ | ✅ | ✅ | — | — |
+
+- **网络增强**在 6.12 会先执行 dry-run，失败则整体回退；**6.18 上游无补丁**，直接跳过。
+- **ZRAM LZ4KD** 上游补丁仅覆盖至 6.6。
+- **BBG 防格机**全部 KMI 可用。
+- 5.10 的网络增强需先打 2 个 sysctl 前置补丁，脚本已自动处理。
+
+> 以上功能与 SUSFS 同属增强项，应用失败**不会中断构建**（各自 `continue-on-error`），
+> 最终在 Actions 的 **Summary** 页与 `RELEASE_NOTES.md` 中列出「已启用 / 跳过 / 未启用」。
+
+## 两种构建模式
+
+构建时需选择一种模式，区别在于 **root 是开机即生效，还是由模块在运行时加载**。
+
+| | `builtin`（内置） | `lkm`（模块） |
 |---|---|---|
-| 形态 | `CONFIG_KSU=y`，编进内核 `Image` | `kernelsu.ko` 可加载模块 |
-| 需要刷分区？ | **是**（刷 boot / init_boot） | **否** |
-| 变砖风险 | 有（刷错 KMI 会不开机） | 极低（不碰分区，出问题删掉 `.ko` 重启即可） |
-| 产物 | AnyKernel3 zip | `aarch64/*.ko` + `x86_64/*.ko` |
-| 架构 | arm64 只有 | arm64 + **x86_64** |
-| SUSFS | 支持 | **不支持**（SUSFS 要直接改内核源码，LKM 不编译内核树） |
-| 内核调优 | 支持 | 不适用（不编内核） |
-| 何时用 | 想要最彻底、开机即生效的 root | 不想动分区 / 想跑模拟器或虚拟机 / 想随时卸掉 |
+| root 位置 | **编入内核**，开机即生效 | `.ko` 文件，由管理器加载 |
+| 是否刷写分区 | **是**（boot / init_boot） | **否** |
+| 变砖风险 | **有**，机型选错可能无法开机 | 极低，删除文件重启即可恢复 |
+| 产物形式 | 刷机 zip | `.ko` 文件 |
+| SUSFS 支持 | 支持 | **不支持** |
+| 适用场景 | 需要开机即生效的完整 root | 不变动分区 / 模拟器 / 需随时卸载 |
 
-**两者的共同点**：都要完整克隆源码仓库（`KSU_VERSION = 30000 + git rev-list --count HEAD`
-在树外编译时同样生效），都**不定义** `KSU_MANAGER_PACKAGE`。
+**选择建议**：常规使用选 `builtin`；不希望刷写分区选 `lkm`。
 
-**LKM 的两个 KMI 特例**（已在 `scripts/build-lkm.sh` 里处理）：
+> 两种模式均要求**完整克隆**源码仓库。版本号由提交次数推导，
+> 浅克隆会导致版本号错误，管理器将持续提示「需要更新内核」。
 
-- `6.12` / `6.18` 必须开 `CONFIG_CFI_ICALL_NORMALIZE_INTEGERS`，否则模块加载时 CFI 校验失败
-- `6.18` 的 Kbuild 用 `MO=` 传模块源码目录 —— 上游注释写明
-  *"6.18 exports the external module source as srcroot when M/MO are used"*，
-  旧写法 `src=` 在 6.18 上会找不到源文件
+> <details><summary>实现说明</summary>
+>
+> - LKM 模式在 6.12 / 6.18 上必须开启 `CONFIG_CFI_ICALL_NORMALIZE_INTEGERS`，否则模块加载时 CFI 校验失败。
+> - 6.18 的 Kbuild 需使用 `MO=` 传递模块源码目录（上游有注释说明），旧写法 `src=` 在 6.18 上无法定位源文件。
+>
+> 上述两条已在 `scripts/build-lkm.sh` 中处理。
+>
+> </details>
 
-## 内核调优档位（`kernel_tweaks`）
+## 内核调优档位
 
+构建时可选用调优档位，共三档，默认 `safe`。完整清单见
+[`config/kernel-tweaks.json`](config/kernel-tweaks.json)。
 
-> **先说清楚**：这一节的内容**不是** KernelSU / SUSFS 的功能。
-> 我逐条读过上游 FinaSU 的 `kernel/Kconfig`（只有 6 个 `KSU*` 项）和 SUSFS 补丁
-> （只有 11 个 `KSU_SUSFS_*` 项，全是「隐藏/伪装」类）——**两边都没有任何网络或功耗相关开关**。
-> 「优化网络功耗」只能在内核自身的 defconfig 层面做，所以有了这个档位。
-
-完整清单在 [`config/kernel-tweaks.json`](config/kernel-tweaks.json)，共 58 条，分五组：
-网络 / 存储 / CPU·功耗 / 内存 / 编译精简。三档语义：
-
-| 档位 | 做什么 | 风险 |
+| 档位 | 说明 | 风险 |
 |---|---|---|
-| `none` | 完全不动，保持 AOSP GKI 原样 | 无 |
-| `safe` | **只启用可选能力，不改任何默认值**。只是把 BBR、fq_codel、BFQ、各种调频器等编译进内核，开机默认行为一字不变，需用户手动切换才生效 | 理论为零 |
-| `smart` | 在 `safe` 之上，把更优算法设为**系统默认**（BBR / fq_codel / schedutil / BFQ），并调 `MMC_BLOCK_MINORS` | 改变默认行为 |
+| `none` | 不做任何改动，与官方一致 | 无 |
+| `safe`（默认） | **仅将功能编入内核，不修改默认设置** —— 例如 BBR、fq_codel、BFQ 编入内核，但开机仍使用原有算法，需手动切换 | 基本无 |
+| `smart` | 在 `safe` 基础上**将默认算法改为上述新算法** | 有一定风险，网络与功耗表现可能变化 |
 
-`safe` 档典型内容（44 条）：
+**建议**：常规使用保持 `safe` 或 `none`；仅在明确了解影响时使用 `smart`。
 
-| 组 | 代表项 | 作用 |
+`safe` 档主要编入以下内容：
+
+| 类别 | 内容 | 作用 |
 |---|---|---|
-| 网络 | `TCP_CONG_BBR`、`NET_SCH_FQ_CODEL`、`NET_SCH_CAKE`、`NET_CLS_BPF` | 弱网吞吐、降延迟、支持流量工具 |
-| 存储 | `IOSCHED_BFQ`、`MQ_IOSCHED_KYBER` | 交互优先调度，滑动跟手 |
-| CPU·功耗 | `CPU_FREQ_GOV_SCHEDUTIL`、`CPU_BOOST` | 能耗感知调频，点击响应 |
-| 内存 | `ZRAM`、`CRYPTO_LZ4`、`CRYPTO_ZSTD` | 内存压缩交换，低内存防卡顿 |
-| 编译精简 | `DEBUG_INFO_NONE`、`DEBUG_LIST` 关闭 | Image 体积降 30%~50% |
+| 网络 | BBR、fq_codel、CAKE、BPF 流量分类 | 弱网吞吐与延迟改善，支持流量工具 |
+| 存储 | BFQ、Kyber 调度 | 交互优先调度 |
+| CPU / 功耗 | schedutil 调频、CPU Boost | 提升响应速度 |
+| 内存 | ZRAM、LZ4、ZSTD | 内存压缩，降低低内存卡顿 |
+| 编译精简 | 移除调试信息 | **镜像体积减少 30%~50%** |
 
-`smart` 档额外内容（14 条）：把 `DEFAULT_TCP_CONG_BBR` / `DEFAULT_FQ_CODEL` /
-`DEFAULT_BFQ` / `DEFAULT_SCHEDUTIL` 打开，同时关掉互斥的旧默认项
-（`DEFAULT_TCP_CONG_CUBIC` / `DEFAULT_FQ` / `DEFAULT_MQ_DEADLINE` / `DEFAULT_PERFORMANCE`），
-`ZRAM_DEF_COMP_LZ4` 设为 zram 默认算法。
+`smart` 档在此基础上，将 BBR / fq_codel / BFQ / schedutil 设为默认算法，
+并关闭与之冲突的旧默认项。
 
-三条工程约束：
+> 若使用 `smart` 后出现耗电增加或卡顿，改回 `safe` 重新构建即可。
+> BFQ 在 UFS 4.0 设备上收益有限，个别场景反而增加 CPU 占用。
 
-1. **必须在 `olddefconfig` 之前执行** —— 否则选中的 `DEFAULT_*` 会被 Kconfig
-   依赖关系重置回默认值。
-2. **不存在的配置项自动跳过**。各 KMI（5.10 ~ 6.12）的 Kconfig 有差异，
-   脚本只记日志不报错，实测 44 条里通常有一半以上在某代内核上不存在。
-3. **单条失败不中断构建**。调优是锦上添花，不该拖垮主流程。
+## 开发者文档
 
-> 如果刷了 `smart` 档后觉得耗电变快 / 卡顿 / 信号异常，改回 `safe` 档重新构建即可。
-> BFQ 在 UFS 4.0 设备上收益不明显，个别场景反而增加 CPU 占用。
+<details>
+<summary><b>构建流程、实现细节与已知问题</b></summary>
 
-## 构建链路
+
+### 构建链路
 
 ```
 AOSP kernel/common @ <kmi>-lts
@@ -228,9 +327,9 @@ AOSP kernel/common @ <kmi>-lts
         └─ 抓最新 Manager APK（Actions artifact 或 GitHub Release）
 ```
 
-## 七个关键实现细节
+### 七个关键实现细节
 
-### 1. 多数方案必须完整克隆（不能 `--depth=1`）
+#### 1. 多数方案必须完整克隆（不能 `--depth=1`）
 
 `kernel/Kbuild` 里的版本号推导是：
 
@@ -254,7 +353,7 @@ KSU_VERSION    := $(VERSION_BASE) + $(LOCAL_COUNT) - $(VERSION_OFFSET)
 它支持 `GITHUB_COMMITS` 环境变量覆盖，**不依赖 git 历史**，所以配置里
 `needs_git_history: false` → workflow 对它走浅克隆（省时间）。是否浅克隆由配置驱动。
 
-### 2. 必须把 `.git` 一起放进内核树
+#### 2. 必须把 `.git` 一起放进内核树
 
 `kernel/Kbuild` 用 `git rev-parse --show-toplevel` 判断"是否处于内核仓库之外的独立仓库"：
 
@@ -273,7 +372,7 @@ ifneq ($(GIT_ROOT),$(KERNEL_GIT_ROOT))   # 只有不同才会设版本号
 > 并执行 `git stash/checkout/pull`，对已克隆的本地源码不可靠，而且上游的
 > `kernel/` 本身就是自包含的完整内核侧源码树，不需要再去拉上游。
 
-### 3. 内核靠签名认管理器 —— 所以必须**不**定义 `KSU_MANAGER_PACKAGE`
+#### 3. 内核靠签名认管理器 —— 所以必须**不**定义 `KSU_MANAGER_PACKAGE`
 
 `kernel/manager/apk_sign.c` 的判断逻辑：
 
@@ -326,7 +425,7 @@ bool is_manager_apk(char *path)
 
 > workflow 里会打印 Manager 的包名与签名指纹并做记录，便于跨版本比对。
 
-### 4. AnyKernel3 ZIP 要做合规自检
+#### 4. AnyKernel3 ZIP 要做合规自检
 
 上游 ksud 已加固 AnyKernel3 ZIP 校验（见 `userspace/ksud/ANYKERNEL3.md`）：
 
@@ -339,7 +438,7 @@ bool is_manager_apk(char *path)
 （`unzip -Z1` 列条目 → 逐项断言），避免生成"刷不进去"的包。
 该脚本可独立运行：`bash scripts/verify-ak3-zip.sh <某个.zip>`。
 
-### 5. 防格机保护（anti-brick）
+#### 5. 防格机保护（anti-brick）
 
 生成的 `anykernel.sh` 在**写任何分区之前**做三重闸门检查，任一不符即 `abort`：
 
@@ -353,7 +452,7 @@ bool is_manager_apk(char *path)
 作为第二道闸保留。A2 是最关键的一条 —— 跨 KMI（例如把 `android15-6.6` 的包刷到
 6.1 的设备上）会导致无法开机，这里会提前拦下来。
 
-### 6. 一加 / OPPO 兼容
+#### 6. 一加 / OPPO 兼容
 
 一加（OnePlus）与 OPPO（含 realme）在 Android 13+ 的 GKI 机型上有几个共性坑，
 脚本里做了运行时分流：
@@ -369,7 +468,7 @@ bool is_manager_apk(char *path)
 
 > 兼容逻辑只做**分流与提示**，不修改 AK3 本体行为，因此对非一加/OPPO 机型无副作用。
 
-### 7. LKM 模式用上游自带的树外编译入口
+#### 7. LKM 模式用上游自带的树外编译入口
 
 上游每个方案的 `<solution>/kernel/` 目录都自带一套 `Makefile`，它从环境变量取
 `KDIR`（内核构建目录）并据此决定 `KBUILD_ARGS`：
@@ -392,7 +491,7 @@ endif
 **单个 KMI 约 40–150 分钟**（取决于 runner、构建模式与是否开 SUSFS）。
 本流程设计为**一次一个方案 / 一个 KMI**，避免大批量 CI 触发 GitHub 风控。
 
-## 上游来源
+#### 上游来源
 
 | 组件 | 来源 |
 |---|---|
@@ -400,43 +499,64 @@ endif
 | Root 内核 | `LyraVoid/FinaSU`、`tiann/KernelSU`、`SukiSU-Ultra/SukiSU-Ultra`、`KernelSU-Next/KernelSU-Next` |
 | Manager APK | 各项目自己的 Actions / Release |
 | SUSFS | `ShirkNeko/susfs4ksu` |
+| BBG 防格机 | `vc-teahouse/Baseband-guard`（走上游 `setup.sh`） |
+| 网络增强 | `WildKernels/kernel_patches@main/common/bbrv3` |
+| ZRAM LZ4KD | `ShirkNeko/SukiSU_patch@main/other/zram` |
 | AK3 框架 | `WildKernels/AnyKernel3@gki-2.0` |
 | LKM 编译方式 | 参考 FinaSU `.github/workflows/ddk-lkm.yml`（本项目改为现场生成 KDIR，不依赖预置 DDK 容器） |
 | 参考实现 | `LingLuo17/AnyKernel3@dev`、`ShirkNeko/GKI_KernelSU_SUSFS` |
 
-## 风险提示
+</details>
 
-- 刷内核**可能变砖**。刷前务必备份原厂 `boot.img` / `init_boot.img`。
-- `lkm` 模式不刷分区，但仍**与 `builtin` 不可共存**；从 `lkm` 转 `builtin` 前请先卸载模块。
-- AK3 脚本以 root 运行，请只刷可信包。
-- Manager 版本与内核版本不一致时会提示"需要更新内核"，这时把 `solution_ref`
-  固定到该 Manager 对应的 commit 即可对齐。
-- 4 个方案产出的内核**只能配各自的管理器**（或签名互通的管理器）；
-  不要把一个方案的内核配上另一个方案的管理器。
+## 注意事项
+
+- **刷写内核有变砖风险。** 刷入前请务必备份原厂 `boot.img` / `init_boot.img`。
+- **确认机型选择正确。** 错误的 KMI 会导致无法开机，建议先执行 `uname -r` 复核。
+- **仅刷入自行构建的包。** 刷机脚本以 root 权限运行，请勿刷入来源不明的包。
+- **内核与管理器需匹配。** 4 个方案的产物不可混用管理器，除非签名互通。
+- **提示「需要更新内核」**：表示管理器版本高于内核，并非故障。可换用较旧版本的管理器，或重新构建。
+- **`lkm` 与 `builtin` 不可共存。** 从 `lkm` 换回 `builtin` 前，需先卸载模块。
 
 ## 仓库结构
 
 ```
 .
-├── .github/workflows/build.yml    # 主构建流程（builtin / lkm 双模式）
-├── config/root-solutions.json     # root 方案注册表（唯一需要改的地方）
-├── config/kmi-matrix.json         # KMI 分支对照表（branch 字段是唯一真源）
-├── config/kernel-tweaks.json      # 内核调优清单（网络/功耗/存储/内存/编译精简）
-├── scripts/resolve-solution.sh    # 解析 root 方案配置 → workflow 输出
-├── scripts/resolve-features.sh    # 解析方案独有内核功能的开关决策表
-├── scripts/fetch-manager.sh       # 自动抓取最新 Manager APK
-├── scripts/apply-tweaks.sh        # 按档位把调优项写进 .config
-├── scripts/build-lkm.sh           # LKM 模式：树外编译 kernelsu.ko（arm64 + x86_64）
-├── scripts/verify-ak3-zip.sh      # AnyKernel3 ZIP 合规自检
+├── .github/workflows/build.yml    # 主构建流程（两种模式）
+├── config/                        # 配置
+│   ├── root-solutions.json        #   root 方案注册表
+│   ├── kmi-matrix.json            #   机型 ↔ 内核分支对照表
+│   ├── kernel-tweaks.json         #   内核调优清单
+│   └── kernel-extras.json         #   附加功能支持矩阵
+├── scripts/                       # 脚本
+│   ├── resolve-solution.sh        #   解析方案配置
+│   ├── resolve-features.sh        #   解析方案独有功能开关
+│   ├── fetch-manager.sh           #   获取最新管理器
+│   ├── apply-tweaks.sh            #   应用调优
+│   ├── apply-extras.sh            #   应用附加功能
+│   ├── collect-fail-logs.sh       #   收集失败日志
+│   ├── build-lkm.sh               #   编译 LKM 模块
+│   └── verify-ak3-zip.sh          #   AK3 包合规校验
 └── README.md
 ```
 
-### 新增一个 root 方案
-
-只需在 `config/root-solutions.json` 的 `solutions[]` 里加一项，并在
-`build.yml` 的 `root_solution.options` 里加一个同名 id。
-其余（克隆、集成、版本算法、Manager 获取、包名白名单、产物命名）全部自动生效。
+> <details><summary><b>新增 root 方案</b></summary>
+>
+> 共两步：在 `config/root-solutions.json` 的 `solutions[]` 中新增一项，
+> 并在 `build.yml` 的 `root_solution.options` 中添加同名 id。
+> 其余流程（克隆、集成、版本号算法、管理器获取、包名白名单、产物命名）均自动生效。
+>
+> 此外，本流程设计为**单次构建仅面向一个方案、一个机型**，以避免批量触发 GitHub 风控。
+>
+> </details>
 
 ## License
 
 构建脚本：MIT。集成产物受各上游许可约束（FinaSU / KernelSU 等均为 GPL-3.0，AK3 见其 LICENSE）。
+
+---
+
+<div align="center">
+
+如果这个项目对你有帮助，欢迎点个 Star。
+
+</div>
