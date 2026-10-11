@@ -1,0 +1,519 @@
+name: Build FolkSU GKI Kernel + AnyKernel3
+
+# 手动触发，一次只编一个 KMI / 一个子版本，避免大批量 CI 与风控。
+on:
+  workflow_dispatch:
+    inputs:
+      kmi:
+        description: "目标 KMI"
+        required: true
+        type: choice
+        default: android15-6.6
+        options:
+          - android12-5.10
+          - android13-5.10
+          - android13-5.15
+          - android14-5.15
+          - android14-6.1
+          - android15-6.6
+          - android16-6.12
+      kernel_branch:
+        description: "AOSP kernel/common 分支（默认用 lts；也可填 android15-6.6-2026-10 这类月度分支）"
+        required: false
+        type: string
+        default: ""
+      folksu_ref:
+        description: "FolkSU 内核源码引用（分支/tag/commit，留空=master）"
+        required: false
+        type: string
+        default: "master"
+      enable_susfs:
+        description: "集成 SUSFS 内核补丁"
+        required: true
+        type: boolean
+        default: true
+      skip_on_patch_failure:
+        description: "补丁失败时跳过而不中断构建"
+        required: true
+        type: boolean
+        default: true
+      make_release:
+        description: "构建成功后创建 Release"
+        required: true
+        type: boolean
+        default: true
+      release_tag:
+        description: "Release tag（留空=自动生成）"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+env:
+  # 项目原名为 FolkSU，2026-10 已改名为 MoeSU（同一仓库，旧名仍会 301 重定向）
+  FOLKSU_REPO: "https://github.com/LyraVoid/MoeSU.git"
+  AK3_REPO: "https://github.com/WildKernels/AnyKernel3.git"
+  AK3_BRANCH: "gki-2.0"
+  SUSFS_REPO: "https://github.com/ShirkNeko/susfs4ksu.git"
+  KERNEL_COMMON: "https://android.googlesource.com/kernel/common"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - name: 输出构建参数
+        run: |
+          echo "KMI           : ${{ inputs.kmi }}"
+          echo "kernel branch : ${{ inputs.kernel_branch || '(auto -> lts)' }}"
+          echo "FolkSU ref    : ${{ inputs.folksu_ref }}"
+          echo "SUSFS         : ${{ inputs.enable_susfs }}"
+          echo "skip on fail  : ${{ inputs.skip_on_patch_failure }}"
+
+      - name: 解析 KMI 参数
+        id: kmi
+        run: |
+          KMI="${{ inputs.kmi }}"
+          KV="${KMI##*-}"            # 6.6
+          AV="${KMI%%-*}"            # android15
+          BRANCH="${{ inputs.kernel_branch }}"
+          [ -n "$BRANCH" ] || BRANCH="${KMI}-lts"
+          echo "kmi=$KMI"        >> $GITHUB_OUTPUT
+          echo "kv=$KV"          >> $GITHUB_OUTPUT
+          echo "av=$AV"          >> $GITHUB_OUTPUT
+          echo "branch=$BRANCH"  >> $GITHUB_OUTPUT
+          echo "resolved: KMI=$KMI KV=$KV AV=$AV BRANCH=$BRANCH"
+
+      - name: 安装构建依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git curl wget zip unzip python3 bc bison flex \
+            libssl-dev libelf-dev cpio kmod rsync ccache
+
+      - name: 拉取 AOSP GKI 内核源码
+        run: |
+          BRANCH="${{ steps.kmi.outputs.branch }}"
+          echo "==> clone kernel/common @ $BRANCH (depth=1)"
+          git clone --depth=1 --branch "$BRANCH" "$KERNEL_COMMON" gki
+          cd gki
+          echo "HEAD: $(git rev-parse HEAD)"
+          echo "$(git log -1 --format='%cd %s' --date=short)" > ../GKI_INFO.txt
+          cat ../GKI_INFO.txt
+
+      # 注意：kernel/Kbuild 里 KSU_VERSION = 30000 + $(git rev-list --count HEAD)。
+      # 浅克隆会让 commit 计数退化成 1，导致版本号错误、管理器提示"需要更新内核"，
+      # 因此这里必须做完整克隆（等价 fetch-depth: 0）。
+      - name: 拉取 FolkSU 内核源码
+        run: |
+          REF="${{ inputs.folksu_ref }}"
+          echo "==> clone FolkSU @ $REF (完整历史，供 Kbuild 统计版本号)"
+          git clone --branch "$REF" "$FOLKSU_REPO" folksu
+          cd folksu
+          KSU_COMMITS="$(git rev-list --count HEAD)"
+          echo "FolkSU HEAD: $(git rev-parse HEAD)"
+          echo "commit count: $KSU_COMMITS  ->  KSU_VERSION=$((30000 + KSU_COMMITS))"
+          {
+            echo "FolkSU ref: $REF"
+            echo "FolkSU HEAD: $(git rev-parse HEAD)"
+            echo "KSU_VERSION=$((30000 + KSU_COMMITS))"
+          } > ../FOLKSU_INFO.txt
+          cat ../FOLKSU_INFO.txt
+
+      # FolkSU 的 kernel/setup.sh 是标准 KernelSU 集成脚本，但它内部执行
+      # git clone/stash/checkout/pull（会去拉 tiann/KernelSU），对"已克隆的本地源码"
+      # 不可靠，而且没必要——FolkSU 的 kernel/ 本身已是自包含的完整内核侧源码树。
+      #
+      # 这里手工集成，关键点：
+      #   * 整个 FolkSU 仓库（含 .git）放进内核树，否则 kernel/Kbuild 的
+      #     `git rev-parse --show-toplevel` 会向上命中 gki/.git，判定为"与内核同一个仓库"，
+      #     从而跳过版本推导，KSU_VERSION 退化成 16，管理器会提示"需要更新内核"。
+      #   * 软链 kernelsu -> folkSU-repo/kernel，保持 -I$(KSU_KERNEL_DIR) 等路径正确。
+      - name: 集成 FolkSU 内核（built-in 模式）
+        working-directory: gki
+        run: |
+          # 1) 找到内核的 drivers 目录
+          if [ -d common/drivers ]; then
+            DRIVER_DIR=common/drivers
+          elif [ -d drivers ]; then
+            DRIVER_DIR=drivers
+          else
+            echo "::error::找不到 drivers/ 或 common/drivers/ 目录"; exit 1
+          fi
+          echo "DRIVER_DIR=$DRIVER_DIR"
+
+          # 2) 放入完整的 FolkSU 仓库副本（保留 .git，供 Kbuild 推导 KSU_VERSION）
+          rm -rf "$DRIVER_DIR/kernelsu" "$DRIVER_DIR/folksu-src"
+          mkdir -p "$DRIVER_DIR/folksu-src"
+          cp -a ../folksu/. "$DRIVER_DIR/folksu-src/"
+          test -d "$DRIVER_DIR/folksu-src/.git" \
+            || echo "::warning::folksu-src 里没有 .git，KSU_VERSION 会退化为 16"
+
+          # 3) 软链 kernelsu -> folksu-src/kernel（相对路径，避免绝对路径污染）
+          ln -s folksu-src/kernel "$DRIVER_DIR/kernelsu"
+          ls -la "$DRIVER_DIR" | grep -i -E "kernelsu|folksu-src"
+
+          # 硬断言：软链必须真的指向源码树，否则后续编译会静默失败
+          [ -L "$DRIVER_DIR/kernelsu" ] \
+            || { echo "::error::$DRIVER_DIR/kernelsu 不是符号链接"; exit 1; }
+          [ -e "$DRIVER_DIR/kernelsu/Kbuild" ] \
+            || { echo "::error::$DRIVER_DIR/kernelsu/Kbuild 不可达，软链未生效"; exit 1; }
+
+          # 4) 往 Makefile 追加编译条目
+          grep -q "kernelsu" "$DRIVER_DIR/Makefile" \
+            || printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> "$DRIVER_DIR/Makefile"
+          grep -n "kernelsu" "$DRIVER_DIR/Makefile"
+
+          # 5) 往 Kconfig 追加 source 行
+          grep -q 'drivers/kernelsu/Kconfig' "$DRIVER_DIR/Kconfig" \
+            || sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' "$DRIVER_DIR/Kconfig"
+          grep -n "kernelsu" "$DRIVER_DIR/Kconfig"
+
+          echo "--- 校验 ---"
+          test -e "$DRIVER_DIR/kernelsu/Kbuild" && echo "OK: Kbuild 存在"
+          test -e "$DRIVER_DIR/kernelsu/Kconfig" && echo "OK: Kconfig 存在"
+          test -e "$DRIVER_DIR/kernelsu/core/init.c" && echo "OK: core/init.c 存在"
+
+          # 6) 提前验证 Kbuild 能否推导出版本号（关键回归点）
+          echo "--- 版本推导预检 ---"
+          if command -v git >/dev/null; then
+            GIT_ROOT="$(cd "$DRIVER_DIR/kernelsu" && git rev-parse --show-toplevel 2>/dev/null || true)"
+            KERNEL_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+            echo "KSU GIT_ROOT    = $GIT_ROOT"
+            echo "KERNEL GIT_ROOT = $KERNEL_ROOT"
+            if [ -n "$GIT_ROOT" ] && [ "$GIT_ROOT" != "$KERNEL_ROOT" ]; then
+              CNT="$(cd "$GIT_ROOT" && git rev-list --count HEAD 2>/dev/null || echo 0)"
+              echo "OK: KSU_VERSION 将推导为 $((30000 + CNT))"
+            else
+              echo "::warning::KSU_VERSION 将退化为 16（git 根判定失败）"
+            fi
+          fi
+
+      - name: 应用 SUSFS 补丁
+        if: ${{ inputs.enable_susfs }}
+        working-directory: gki
+        continue-on-error: ${{ inputs.skip_on_patch_failure }}
+        run: |
+          SUSFS_BRANCH="gki-${{ steps.kmi.outputs.av }}-${{ steps.kmi.outputs.kv }}"
+          echo "==> clone susfs4ksu @ $SUSFS_BRANCH"
+          if ! git clone --depth=1 --branch "$SUSFS_BRANCH" "$SUSFS_REPO" /tmp/susfs4ksu; then
+            echo "::warning::susfs4ksu 无 $SUSFS_BRANCH 分支，跳过 SUSFS"
+            exit 0
+          fi
+          PATCH="/tmp/susfs4ksu/kernel_patches/50_add_susfs_in_${SUSFS_BRANCH}.patch"
+          if [ ! -f "$PATCH" ]; then
+            echo "::warning::找不到补丁 $PATCH，跳过 SUSFS"
+            exit 0
+          fi
+          echo "==> [1/2] 应用内核侧补丁 $PATCH"
+          patch -p1 --forward < "$PATCH"
+
+          echo "==> 复制 susfs 头文件与源到内核树"
+          if [ -d /tmp/susfs4ksu/kernel_patches/fs ]; then
+            cp -v /tmp/susfs4ksu/kernel_patches/fs/* fs/ 2>/dev/null || true
+          fi
+          if [ -d /tmp/susfs4ksu/kernel_patches/include/linux ]; then
+            cp -v /tmp/susfs4ksu/kernel_patches/include/linux/* include/linux/ 2>/dev/null || true
+          fi
+
+          echo "==> [2/2] 应用 KernelSU(FolkSU) 侧补丁"
+          KSU_PATCH="/tmp/susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
+          if [ -f "$KSU_PATCH" ]; then
+            # FolkSU 源码经 setup.sh 软链到 drivers/kernelsu，补丁以 KernelSU/ 为根，
+            # 因此用 -d 指向软链目标目录并剥掉一层前缀。
+            KSU_DIR="$(readlink -f drivers/kernelsu)"
+            echo "KSU dir -> $KSU_DIR"
+            if patch -p1 --forward -d "$KSU_DIR" < "$KSU_PATCH"; then
+              echo "OK: KSU 侧 SUSFS 补丁已应用"
+            else
+              echo "::warning::KSU 侧 SUSFS 补丁未完全应用（FolkSU 源码结构可能与官方 KernelSU 不同）"
+            fi
+          else
+            echo "::warning::未找到 $KSU_PATCH，仅应用内核侧 SUSFS"
+          fi
+          echo "SUSFS applied (kernel side)."
+
+      - name: 配置内核（CONFIG_KSU=y）
+        working-directory: gki
+        run: |
+          echo "==> gki_defconfig"
+          make ARCH=arm64 LLVM=1 gki_defconfig
+
+          # GKI 默认开 LTO（THINLTO/FULL），会显著拖长编译并易 OOM；关掉。
+          scripts/config --file .config -d LTO_CLANG -e LTO_NONE \
+            -d LTO_CLANG_THIN -d LTO_CLANG_FULL -d THINLTO || true
+
+          # --- KernelSU(MoeSU/FolkSU) 必需项 ---
+          # Kconfig: config KSU depends on KPROBES && EXT4_FS，default y
+          scripts/config --file .config -e KSU
+          scripts/config --file .config -e KSU_DYNAMIC_MANAGER
+          # 依赖：KPROBES + EXT4_FS
+          scripts/config --file .config -e KPROBES
+          scripts/config --file .config -e KPROBES_EVENTS || true
+          scripts/config --file .config -e EXT4_FS
+
+          # --- 故意不定义 KSU_MANAGER_PACKAGE ---
+          # kernel/manager/apk_sign.c 的 is_manager_apk() 逻辑是：
+          #   #ifdef KSU_MANAGER_PACKAGE  →  先比对包名，不等就直接 false
+          #   然后才比对签名
+          # 即「包名校验」与「签名校验」是 AND 关系。
+          #
+          # 上游已确定下一个版本会把 Manager 包名从 me.yuki.folksu 改为 me.yuki.moe
+          # （签名证书不变）。若这里固化了包名，改名后内核将不再识别新 Manager。
+          # 因此保持不定义，让内核只按签名信任 —— 签名不变则跨版本始终可用。
+          # 如需手动指定，用 make 命令行传：KSU_MANAGER_PACKAGE=<包名>
+          echo "==> 确认未固化 Manager 包名（只按签名信任）"
+          grep -q "KSU_MANAGER_PACKAGE" .config 2>/dev/null \
+            && echo "::warning::检测到 KSU_MANAGER_PACKAGE，改名后可能失效" \
+            || echo "OK: 未固化包名"
+
+          # --- SUSFS（若补丁已应用，这些符号才存在）---
+          for sym in KSU_SUSFS KSU_SUSFS_SUS_PATH KSU_SUSFS_SUS_MOUNT \
+                     KSU_SUSFS_SUS_KSTAT KSU_SUSFS_SPOOF_UNAME \
+                     KSU_SUSFS_ENABLE_LOG KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS; do
+            scripts/config --file .config -e "$sym" 2>/dev/null || true
+          done
+
+          # 内核侧符号解析
+          scripts/config --file .config -e KALLSYMS -e KALLSYMS_ALL || true
+
+          echo "==> olddefconfig 归一化"
+          make ARCH=arm64 LLVM=1 olddefconfig
+
+          echo "==> 最终关键配置"
+          grep -E "^CONFIG_(KSU|KPROBES|EXT4_FS|LTO)" .config || true
+          echo "--- 断言 CONFIG_KSU 生效 ---"
+          grep -qE '^CONFIG_KSU=y' .config || grep -qE '^CONFIG_KSU=m' .config \
+            || { echo "::error::CONFIG_KSU 未生效，集成失败"; exit 1; }
+
+      - name: 编译内核
+        working-directory: gki
+        run: |
+          echo "==> 开始编译（预计 40-150 分钟）"
+          nproc
+          make ARCH=arm64 LLVM=1 -j"$(nproc)" Image
+          echo "==> 编译完成"
+          ls -la arch/arm64/boot/Image
+          du -h arch/arm64/boot/Image
+
+      - name: 校验内核内含 KSU
+        working-directory: gki
+        run: |
+          strings arch/arm64/boot/Image | grep -m3 -iE "kernelsu|KSU" || echo "note: 未在 Image 中直接匹配到 ksu 字符串（可能被压缩），继续"
+          echo "kernel release: $(make ARCH=arm64 LLVM=1 -s kernelrelease)"
+
+      - name: 准备 AK3 打包目录
+        run: |
+          echo "==> clone AK3 @ $AK3_BRANCH"
+          git clone --depth=1 --branch "$AK3_BRANCH" "$AK3_REPO" ak3
+          rm -rf ak3/.git
+          echo "--- AK3 内容 ---"
+          ls -la ak3/
+          echo "--- marker 校验（FolkSU/标准 AK3 要求恰好 1 个）---"
+          grep -c "chmod -R 755 tools bin;" ak3/META-INF/com/google/android/update-binary
+
+      - name: 写入 GKI 版 anykernel.sh
+        env:
+          KMI_NAME: ${{ steps.kmi.outputs.kmi }}
+        run: |
+          python3 - <<'PYEOF'
+          import os
+
+          kmi = os.environ["KMI_NAME"]
+          content = f'''### AnyKernel3 Ramdisk Mod Script
+          ## osm0sis @ xda-developers | FolkSU GKI build
+
+          properties() {{ '
+          kernel.string=FolkSU {kmi} GKI Kernel
+          do.devicecheck=0
+          do.modules=0
+          do.systemless=0
+          do.cleanup=1
+          do.cleanuponabort=0
+          do.check_boot_version=1
+          supported.versions=
+          supported.patchlevels=
+          supported.vendorpatchlevels=
+          keycheck.timeout=10
+          '; }}
+
+          block=boot
+          is_slot_device=auto
+          ramdisk_compression=auto
+          patch_vbmeta_flag=auto
+          no_magisk_check=1
+
+          . tools/ak3-core.sh;
+
+          # GKI 版本白名单硬校验
+          kernel_version=$(cat /proc/version | awk -F '-' '{{print $1}}' | awk '{{print $3}}')
+          case $kernel_version in
+             5.10*|5.15*|6.1*|6.6*|6.12*) ksu_supported=true ;;
+             *) ksu_supported=false ;;
+          esac
+          ui_print " " "  -> GKI Supported: $ksu_supported"
+          $ksu_supported || abort "  -> Non-GKI device, abort."
+
+          # 校验待刷内核与设备内核主版本是否一致（防跨 KMI 刷砖）
+          do_check_boot_version;
+
+          split_boot
+
+          if [ -f "$SPLITIMG/ramdisk.cpio" ]; then
+              unpack_ramdisk
+              write_boot
+          else
+              flash_boot
+          fi
+
+          ui_print " "
+          ui_print "FolkSU {kmi} GKI"
+          ui_print " "
+          '''
+          # 去掉 python 三引号的公共缩进
+          lines = content.split("\n")
+          dedented = "\n".join(l[10:] if l.startswith(" " * 10) else l for l in lines)
+          if not dedented.endswith("\n"):
+              dedented += "\n"
+          with open("ak3/anykernel.sh", "w", encoding="utf-8", newline="\n") as f:
+              f.write(dedented)
+          print(dedented)
+          PYEOF
+          echo "--- 语法检查 ---"
+          bash -n ak3/anykernel.sh && echo "OK: anykernel.sh 语法合法"
+
+      - name: 放入 Image 并打包 AnyKernel3
+        id: pack
+        run: |
+          KMI="${{ steps.kmi.outputs.kmi }}"
+          SUB="$(grep -oE '^[0-9]+\.[0-9]+\.[0-9]+' GKI_INFO.txt | head -1 || true)"
+          ZIP="FolkSU-${KMI}-GKI-AnyKernel3.zip"
+          cp gki/arch/arm64/boot/Image ak3/Image
+          cd ak3
+          zip -r9 "../$ZIP" ./* -x '*.git*'
+          cd ..
+          ls -la "$ZIP"
+          echo "zip_name=$ZIP" >> $GITHUB_OUTPUT
+          echo "zip_path=$(pwd)/$ZIP" >> $GITHUB_OUTPUT
+
+      - name: 获取最新 FolkSU Manager（root 管理器）
+        id: manager
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MANAGER_REPO: "LyraVoid/MoeSU"
+          MANAGER_WORKFLOW: "build-manager.yml"
+          MANAGER_REF: "${{ inputs.folksu_ref }}"
+        run: |
+          chmod +x scripts/fetch-manager.sh
+          bash scripts/fetch-manager.sh
+          echo "--- 拿到 ---"
+          ls -la manager-artifacts/ || true
+
+      - name: 校验 Manager 与内核版本对齐
+        continue-on-error: true
+        run: |
+          echo "内核 KSU_VERSION : $(grep -oE 'KSU_VERSION=[0-9]+' FOLKSU_INFO.txt | head -1 | cut -d= -f2)"
+          echo "Manager versionCode: ${{ steps.manager.outputs.manager_version_code }}"
+          K=$(grep -oE 'KSU_VERSION=[0-9]+' FOLKSU_INFO.txt | head -1 | cut -d= -f2)
+          M="${{ steps.manager.outputs.manager_version_code }}"
+          if [ -n "$K" ] && [ -n "$M" ] && [ "$K" != "$M" ]; then
+            echo "::warning::内核 KSU_VERSION($K) 与 Manager versionCode($M) 不一致，管理器可能提示'需要更新内核'"
+            echo "            可将 folksu_ref 固定到该 Manager 对应的 commit 以对齐。"
+          else
+            echo "OK: 版本一致或无法比较"
+          fi
+
+      - name: 校验 Manager 签名与包名
+        if: ${{ steps.manager.outputs.apk_path != '' }}
+        continue-on-error: true
+        env:
+          APK: ${{ steps.manager.outputs.apk_path }}
+        run: |
+          echo "==> Manager APK: $APK"
+          # 1) 打印包名 —— 上游已确定下一版把 Manager 从
+          #    FolkSU(me.yuki.folksu) 改名为 moesu。签名证书不变。
+          #    内核只按签名信任，所以包名/展示名变化不影响可用性，这里只做记录。
+          if command -v aapt2 >/dev/null 2>&1 || [ -n "${ANDROID_HOME:-}" ]; then
+            AAPT="$(command -v aapt2 || echo "${ANDROID_HOME:-}/build-tools/$(ls "${ANDROID_HOME:-}/build-tools" 2>/dev/null | sort -V | tail -1)/aapt2")"
+            if [ -x "$AAPT" ]; then
+              PKG="$("$AAPT" dump packagename "$APK" 2>/dev/null || true)"
+              echo "包名: ${PKG:-<未能读取>}"
+              case "$PKG" in
+                me.yuki.folksu|me.yuki.folksu.pr|me.yuki.moesu|me.yuki.moe|me.yuki.moesu.pr|me.yuki.moe.pr)
+                  echo "OK: 包名在已知集合内" ;;
+                "")
+                  echo "::warning::未能读取包名（aapt2 不可用？）" ;;
+                *)
+                  echo "::warning::包名为 $PKG，不在已知集合（新版本可能又改名了）" ;;
+              esac
+              APPNAME="$("$AAPT" dump badging "$APK" 2>/dev/null | sed -nE "s/^application-label:'(.*)'$/\1/p" | head -1 || true)"
+              echo "展示名: ${APPNAME:-<未能读取>}"
+            else
+              echo "note: 未找到 aapt2，跳过包名检查"
+            fi
+          else
+            echo "note: 无 Android SDK，跳过包名检查"
+          fi
+
+          # 2) 打印签名指纹（用于跨版本比对；签名不变则指纹应始终一致）
+          if command -v keytool >/dev/null 2>&1; then
+            echo "--- 签名证书（前 2 条）---"
+            keytool -printcert -jarfile "$APK" 2>/dev/null \
+              | grep -E "Owner:|SHA256:|SHA1:" | head -6 \
+              || echo "note: keytool 读取失败"
+          else
+            echo "note: 无 keytool，跳过签名打印"
+          fi
+          echo "SHA256(apk) = $(sha256sum "$APK" | awk '{print $1}')"
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: FolkSU-GKI-${{ inputs.kmi }}-AnyKernel3
+          path: ${{ steps.pack.outputs.zip_name }}
+
+      - name: 上传 Manager
+        if: ${{ steps.manager.outputs.apk_path != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: FolkSU-Manager-${{ steps.manager.outputs.manager_version }}
+          path: ${{ steps.manager.outputs.apk_path }}
+
+      - name: 生成内核信息
+        run: |
+          {
+            echo "# FolkSU GKI Build"
+            echo ""
+            echo "| 项 | 值 |"
+            echo "|---|---|"
+            echo "| KMI | \`${{ inputs.kmi }}\` |"
+            echo "| AOSP branch | \`${{ steps.kmi.outputs.branch }}\` |"
+            echo "| FolkSU ref | \`${{ inputs.folksu_ref }}\` |"
+            echo "| SUSFS | \`${{ inputs.enable_susfs }}\` |"
+            echo "| Manager 版本 | \`${{ steps.manager.outputs.manager_version || '未获取' }}\` |"
+            echo "| Manager versionCode | \`${{ steps.manager.outputs.manager_version_code || '-' }}\` |"
+            echo ""
+            echo "## 内核源码"
+            echo '```'
+            cat GKI_INFO.txt
+            echo ""
+            cat FOLKSU_INFO.txt 2>/dev/null || true
+            echo '```'
+          } > RELEASE_NOTES.md
+          cat RELEASE_NOTES.md
+
+      - name: 创建 Release
+        if: ${{ inputs.make_release }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag || format('folksu-{0}-{1}', inputs.kmi, github.run_number) }}
+          name: "FolkSU GKI ${{ inputs.kmi }}"
+          body_path: RELEASE_NOTES.md
+          files: |
+            ${{ steps.pack.outputs.zip_name }}
+            ${{ steps.manager.outputs.apk_path }}
+          fail_on_unmatched_files: false
+          generate_release_notes: false

@@ -1,0 +1,18 @@
+# 让 Windows 提交也保持 LF，避免 shell 脚本在 runner 上因 CRLF 报错
+* text=auto eol=lf
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+LICENSE text eol=lf
+
+# Windows 下 git 不保存 exec 位，用 gitattributes 强制标记，
+# 保证 runner 上脚本可直接执行（workflow 里另外还有 chmod +x 兜底）
+scripts/*.sh text eol=lf
+
+# 二进制
+*.png binary
+*.jpg binary
+*.zip binary
+*.apk binary

@@ -1,0 +1,18 @@
+# 构建产物
+/out/
+/build/
+*.zip
+*.apk
+*.img
+
+# 本地拉取的源码（CI 现拉，不入库）
+/gki/
+/folksu/
+/ak3/
+/folksu-src/
+/manager-artifacts/
+
+# 临时
+*.tmp
+*.log
+.DS_Store

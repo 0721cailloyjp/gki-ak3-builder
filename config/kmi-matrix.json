@@ -1,0 +1,76 @@
+{
+  "_comment": "GKI KMI matrix for >= 5.10. branch = AOSP android.googlesource.com/kernel/common branch name.",
+  "_verified": "2026-10-11 from android.googlesource.com/kernel/common/+refs",
+  "kmi": [
+    {
+      "name": "android12-5.10",
+      "kernel_version": "5.10",
+      "android_version": "android12",
+      "branch": "android12-5.10-lts",
+      "monthly_example": "android12-5.10-2026-10",
+      "defconfig": "gki_defconfig",
+      "clang": true,
+      "lto_off_required": true
+    },
+    {
+      "name": "android13-5.10",
+      "kernel_version": "5.10",
+      "android_version": "android13",
+      "branch": "android13-5.10-lts",
+      "monthly_example": "android13-5.10-2026-10",
+      "defconfig": "gki_defconfig",
+      "clang": true,
+      "lto_off_required": true
+    },
+    {
+      "name": "android13-5.15",
+      "kernel_version": "5.15",
+      "android_version": "android13",
+      "branch": "android13-5.15-lts",
+      "monthly_example": "android13-5.15-2026-09",
+      "defconfig": "gki_defconfig",
+      "clang": true,
+      "lto_off_required": true
+    },
+    {
+      "name": "android14-5.15",
+      "kernel_version": "5.15",
+      "android_version": "android14",
+      "branch": "android14-5.15-lts",
+      "monthly_example": "android14-5.15-2026-10",
+      "defconfig": "gki_defconfig",
+      "clang": true,
+      "lto_off_required": true
+    },
+    {
+      "name": "android14-6.1",
+      "kernel_version": "6.1",
+      "android_version": "android14",
+      "branch": "android14-6.1-lts",
+      "monthly_example": "android14-6.1-2026-09",
+      "defconfig": "gki_defconfig",
+      "clang": true,
+      "lto_off_required": true
+    },
+    {
+      "name": "android15-6.6",
+      "kernel_version": "6.6",
+      "android_version": "android15",
+      "branch": "android15-6.6-lts",
+      "monthly_example": "android15-6.6-2026-10",
+      "defconfig": "gki_defconfig",
+      "clang": true,
+      "lto_off_required": true
+    },
+    {
+      "name": "android16-6.12",
+      "kernel_version": "6.12",
+      "android_version": "android16",
+      "branch": "android16-6.12-lts",
+      "monthly_example": "android16-6.12-2026-09",
+      "defconfig": "gki_defconfig",
+      "clang": true,
+      "lto_off_required": true
+    }
+  ]
+}
