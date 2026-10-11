@@ -123,18 +123,23 @@ jobs:
       # 硬断言：解析必须真的产出输出。漏写 $GITHUB_OUTPUT 会让下游拿到空字符串，
       # 表现为 shell 报 "The empty string is not a valid path" 这种难查的错误。
       - name: 校验方案输出
+        # ⚠️ 必须走 env: 传值，不能内联 "${{ ... }}"。
+        # sol_optional_features 是 JSON（含双引号），内联进 shell 双引号里会
+        # 让引号提前闭合，JSON 里的中文就成了独立单词，报
+        #   line N: 的: command not found   -> exit 127
+        # env: 由 runner 直接注入环境变量，不经过 shell 词法分析。
+        env:
+          SOL_NAME: ${{ steps.sol.outputs.sol_name }}
+          SOL_REPO: ${{ steps.sol.outputs.sol_repo }}
+          SOL_REF: ${{ steps.sol.outputs.sol_ref }}
+          SOL_GIT: ${{ steps.sol.outputs.sol_needs_git }}
+          SOL_FORMULA: ${{ steps.sol.outputs.sol_version_formula }}
+          MGR_REPO: ${{ steps.sol.outputs.mgr_repo }}
+          MGR_PKGS: ${{ steps.sol.outputs.mgr_pkgs }}
+          SOL_ALWAYS: ${{ steps.sol.outputs.sol_always_enable }}
+          SOL_OPT: ${{ steps.sol.outputs.sol_optional_features }}
         run: |
-          SOL_NAME="${{ steps.sol.outputs.sol_name }}"
-          SOL_REPO="${{ steps.sol.outputs.sol_repo }}"
-          SOL_REF="${{ steps.sol.outputs.sol_ref }}"
-          SOL_GIT="${{ steps.sol.outputs.sol_needs_git }}"
-          SOL_FORMULA="${{ steps.sol.outputs.sol_version_formula }}"
-          MGR_REPO="${{ steps.sol.outputs.mgr_repo }}"
-          MGR_PKGS="${{ steps.sol.outputs.mgr_pkgs }}"
-          SOL_ALWAYS="${{ steps.sol.outputs.sol_always_enable }}"
-          SOL_OPT="${{ steps.sol.outputs.sol_optional_features }}"
-
-          printf '%-16s = %s\n' \
+          printf '%-20s = %s\n' \
             sol_name "$SOL_NAME" \
             sol_repo "$SOL_REPO" \
             sol_ref "$SOL_REF" \
@@ -156,16 +161,26 @@ jobs:
           echo "OK: 方案输出已就绪（$SOL_NAME）"
 
       - name: 输出构建参数
+        env:
+          IN_MODE: ${{ inputs.build_mode }}
+          IN_KPM: ${{ inputs.feature_kpm }}
+          IN_SOL: ${{ inputs.root_solution }}
+          IN_KMI: ${{ inputs.kmi }}
+          IN_BRANCH: ${{ inputs.kernel_branch }}
+          IN_REF: ${{ inputs.solution_ref }}
+          IN_SUSFS: ${{ inputs.enable_susfs }}
+          IN_SKIP: ${{ inputs.skip_on_patch_failure }}
+          IN_TWEAKS: ${{ inputs.kernel_tweaks }}
         run: |
-          echo "构建模式      : ${{ inputs.build_mode }}"
-          echo "KPM           : ${{ inputs.feature_kpm }}（仅 SukiSU-Ultra 有效）"
-          echo "root 方案     : ${{ inputs.root_solution }}"
-          echo "KMI           : ${{ inputs.kmi }}"
-          echo "kernel branch : ${{ inputs.kernel_branch || '(auto -> lts)' }}"
-          echo "solution ref  : ${{ inputs.solution_ref || '(配置默认)' }}"
-          echo "SUSFS         : ${{ inputs.enable_susfs }}"
-          echo "skip on fail  : ${{ inputs.skip_on_patch_failure }}"
-          echo "内核调优      : ${{ inputs.kernel_tweaks }}"
+          echo "构建模式      : ${IN_MODE}"
+          echo "KPM           : ${IN_KPM}（仅 SukiSU-Ultra 有效）"
+          echo "root 方案     : ${IN_SOL}"
+          echo "KMI           : ${IN_KMI}"
+          echo "kernel branch : ${IN_BRANCH:-（auto -> lts）}"
+          echo "solution ref  : ${IN_REF:-（配置默认）}"
+          echo "SUSFS         : ${IN_SUSFS}"
+          echo "skip on fail  : ${IN_SKIP}"
+          echo "内核调优      : ${IN_TWEAKS}"
 
       # KMI → AOSP 分支的映射来自 config/kmi-matrix.json 的 branch 字段（唯一真源）。
       # 不要用 "<kmi>-lts" 硬推导：android17-6.18 的分支名没有 -lts 后缀，
@@ -290,10 +305,14 @@ jobs:
           NEEDS_GIT: ${{ steps.sol.outputs.sol_needs_git }}
           SOL_REPO: ${{ steps.sol.outputs.sol_repo }}
           DEFAULT_REF: ${{ steps.sol.outputs.sol_ref }}
+          SOL_ID_ENV: ${{ steps.sol.outputs.sol_id }}
+          SOL_NAME_ENV: ${{ steps.sol.outputs.sol_name }}
+          SOL_FORMULA_ENV: ${{ steps.sol.outputs.sol_version_formula }}
+          IN_REF_ENV: ${{ inputs.solution_ref }}
         run: |
-          REF="${{ inputs.solution_ref }}"
+          REF="${IN_REF_ENV}"
           [ -n "$REF" ] || REF="$DEFAULT_REF"
-          echo "==> 方案: ${{ steps.sol.outputs.sol_name }}  仓库: $SOL_REPO  引用: $REF"
+          echo "==> 方案: $SOL_NAME_ENV  仓库: $SOL_REPO  引用: $REF"
           # 空值保护：空字符串会让 git 报 "The empty string is not a valid path"
           [ -n "$SOL_REPO" ] || { echo "::error::SOL_REPO 为空"; exit 1; }
           [ -n "$REF" ]      || { echo "::error::REF 为空"; exit 1; }
@@ -309,11 +328,11 @@ jobs:
           echo "HEAD: $(git rev-parse HEAD)"
           echo "commit count: $KSU_COMMITS"
           {
-            echo "solution: ${{ steps.sol.outputs.sol_id }} (${{ steps.sol.outputs.sol_name }})"
+            echo "solution: $SOL_ID_ENV ($SOL_NAME_ENV)"
             echo "ref: $REF"
             echo "HEAD: $(git rev-parse HEAD)"
             echo "commit_count: $KSU_COMMITS"
-            echo "version_formula: ${{ steps.sol.outputs.sol_version_formula }}"
+            echo "version_formula: $SOL_FORMULA_ENV"
           } > ../KSU_INFO.txt
           cat ../KSU_INFO.txt
 
@@ -442,6 +461,14 @@ jobs:
       - name: 配置内核（built-in：CONFIG_KSU=y）
         if: ${{ inputs.build_mode == 'builtin' }}
         working-directory: gki
+        # ⚠️ 所有来自步骤输出的值都走 env:，不内联 "${{ ... }}"。
+        # sol_optional_features 是 JSON（含双引号 + 中文），内联会让 shell
+        # 引号提前闭合，报 "line N: 的: command not found"（exit 127）。
+        env:
+          SOL_ID_ENV: ${{ steps.sol.outputs.sol_id }}
+          SOL_ALWAYS_ENV: ${{ steps.sol.outputs.sol_always_enable }}
+          SOL_OPT_JSON_ENV: ${{ steps.sol.outputs.sol_optional_features }}
+          FEAT_KPM_ENV: ${{ inputs.feature_kpm }}
         run: |
           echo "==> gki_defconfig"
           make ARCH=arm64 $LLVM_MAKE_ARGS gki_defconfig
@@ -500,9 +527,9 @@ jobs:
             fi
           }
 
-          SOL_ID="${{ steps.sol.outputs.sol_id }}"
-          SOL_ALWAYS="${{ steps.sol.outputs.sol_always_enable }}"
-          SOL_OPT_JSON='${{ steps.sol.outputs.sol_optional_features }}'
+          SOL_ID="${SOL_ID_ENV}"
+          SOL_ALWAYS="${SOL_ALWAYS_ENV}"
+          SOL_OPT_JSON="${SOL_OPT_JSON_ENV}"
 
           echo "==> 方案 $SOL_ID 的内核功能开关"
           echo "    always_enable : ${SOL_ALWAYS:-<无>}"
@@ -523,7 +550,7 @@ jobs:
             echo "    可选功能（按输入决定）:"
             OPT_SH="$GITHUB_WORKSPACE/scripts/resolve-features.sh"
             OPT_LINES="$(SOL_OPT_JSON="$SOL_OPT_JSON" \
-                         FEAT_KPM='${{ inputs.feature_kpm }}' \
+                         FEAT_KPM="$FEAT_KPM_ENV" \
                          bash "$OPT_SH" 2>/dev/null || true)"
 
             if [ -n "$OPT_LINES" ]; then
@@ -608,7 +635,7 @@ jobs:
             return 0
           }
 
-          SOL_ALWAYS_CHK="${{ steps.sol.outputs.sol_always_enable }}"
+          SOL_ALWAYS_CHK="$SOL_ALWAYS_ENV"
           if [ -n "$SOL_ALWAYS_CHK" ]; then
             printf '%s\n' "$SOL_ALWAYS_CHK" | tr ',' '\n' | while read -r sym; do
               [ -n "$sym" ] || continue
@@ -616,7 +643,7 @@ jobs:
             done
           fi
           # KPM 若被请求开启，必须真的开（否则等于用户白选了）
-          if [ "${{ inputs.feature_kpm }}" = "true" ] && [ "${{ steps.sol.outputs.sol_id }}" = "sukisu" ]; then
+          if [ "$FEAT_KPM_ENV" = "true" ] && [ "$SOL_ID_ENV" = "sukisu" ]; then
             ST_KPM="$(scripts/config --file .config --state KPM 2>/dev/null || echo undef)"
             echo "    KPM = $ST_KPM （用户已请求开启）"
             case "$ST_KPM" in
@@ -919,11 +946,14 @@ jobs:
 
       - name: 校验 Manager 与内核版本对齐
         continue-on-error: true
+        env:
+          E_FORMULA: ${{ steps.sol.outputs.sol_version_formula }}
+          E_MGR_CODE: ${{ steps.manager.outputs.manager_version_code }}
         run: |
           echo "内核 commit 数 : $(grep -oE 'commit_count: [0-9]+' KSU_INFO.txt | head -1 | awk '{print $2}')"
-          echo "内核版本算法   : ${{ steps.sol.outputs.sol_version_formula }}"
-          echo "Manager versionCode: ${{ steps.manager.outputs.manager_version_code }}"
-          M="${{ steps.manager.outputs.manager_version_code }}"
+          echo "内核版本算法   : ${E_FORMULA}"
+          echo "Manager versionCode: ${E_MGR_CODE}"
+          M="${E_MGR_CODE}"
           if [ -n "$M" ] && [ "$M" != "0" ]; then
             echo "OK: 已拿到 Manager versionCode=$M"
             echo "   若管理器提示'需要更新内核'，把 solution_ref 固定到该 Manager 对应的 commit 即可对齐。"
@@ -993,21 +1023,36 @@ jobs:
           path: ${{ steps.manager.outputs.apk_path }}
 
       - name: 生成内核信息
+        # 同样走 env:：下面的反引号是 markdown 代码块标记，若值里恰好含
+        # 反引号/双引号，内联展开会让 shell 把它当命令替换执行。
+        env:
+          E_MODE: ${{ inputs.build_mode }}
+          E_SOL: ${{ inputs.root_solution }}
+          E_SOL_NAME: ${{ steps.sol.outputs.sol_name }}
+          E_KMI: ${{ inputs.kmi }}
+          E_BRANCH: ${{ steps.kmi.outputs.branch }}
+          E_REF: ${{ inputs.solution_ref }}
+          E_SOL_REF: ${{ steps.sol.outputs.sol_ref }}
+          E_SUSFS: ${{ inputs.enable_susfs }}
+          E_TWEAKS: ${{ inputs.kernel_tweaks }}
+          E_MGR_VER: ${{ steps.manager.outputs.manager_version }}
+          E_MGR_CODE: ${{ steps.manager.outputs.manager_version_code }}
         run: |
+          SOL_REF_RESOLVED="${E_REF:-${E_SOL_REF}}"
           {
-            echo "# ${{ steps.sol.outputs.sol_name }} GKI Build"
+            echo "# ${E_SOL_NAME} GKI Build"
             echo ""
             echo "| 项 | 值 |"
             echo "|---|---|"
-            echo "| 构建模式 | \`${{ inputs.build_mode }}\` |"
-            echo "| root 方案 | \`${{ inputs.root_solution }}\` (${{ steps.sol.outputs.sol_name }}) |"
-            echo "| KMI | \`${{ inputs.kmi }}\` |"
-            echo "| AOSP branch | \`${{ steps.kmi.outputs.branch }}\` |"
-            echo "| 源码 ref | \`${{ inputs.solution_ref || steps.sol.outputs.sol_ref }}\` |"
-            echo "| SUSFS | \`${{ inputs.enable_susfs }}\` |"
-            echo "| 内核调优 | \`${{ inputs.kernel_tweaks }}\` |"
-            echo "| Manager 版本 | \`${{ steps.manager.outputs.manager_version || '未获取' }}\` |"
-            echo "| Manager versionCode | \`${{ steps.manager.outputs.manager_version_code || '-' }}\` |"
+            echo "| 构建模式 | \`${E_MODE}\` |"
+            echo "| root 方案 | \`${E_SOL}\` (${E_SOL_NAME}) |"
+            echo "| KMI | \`${E_KMI}\` |"
+            echo "| AOSP branch | \`${E_BRANCH}\` |"
+            echo "| 源码 ref | \`${SOL_REF_RESOLVED}\` |"
+            echo "| SUSFS | \`${E_SUSFS}\` |"
+            echo "| 内核调优 | \`${E_TWEAKS}\` |"
+            echo "| Manager 版本 | \`${E_MGR_VER:-未获取}\` |"
+            echo "| Manager versionCode | \`${E_MGR_CODE:--}\` |"
             echo ""
             echo "## 内核源码"
             echo '```'
