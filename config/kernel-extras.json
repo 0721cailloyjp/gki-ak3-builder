@@ -1,0 +1,193 @@
+{
+  "_comment": "附加内核功能（非 root 必需，全部默认关闭）。设计原则与 kernel-tweaks.json 一致：差异全部进本文件，workflow 不含任何硬编码的 KMI/版本判断。新增功能 = 在这里加一块 + 在 build.yml 的 inputs 加同名开关。",
+  "_verified": "2026-10-11 逐项核对上游补丁源与 KMI 适配",
+  "_applies_to": "仅 built-in 模式。LKM 模式不改内核树，因此这些内核侧功能一概不适用。",
+  "_order_note": "各功能的执行顺序由 build.yml 固定（补丁类在网络增强之前、配置类在 olddefconfig 之前），本文件只描述「支持矩阵 + 参数」，不描述顺序。",
+
+  "extras": [
+    {
+      "id": "bbg",
+      "name": "BBG 防格机",
+      "input": "feature_bbg",
+      "default": false,
+      "risk": "low",
+      "kind": "source_integration",
+      "desc": "Baseband-guard（vc-teahouse）：一个 LSM 模块，拦截对基带/efisp 等关键分区的非法写入，防止基带被刷坏导致变砖。与 anykernel.sh 的刷机前检查互补 —— 前者防「刷错包」，本项防「系统起来后被恶意程序写坏基带」。",
+      "source": {
+        "type": "script",
+        "repo": "vc-teahouse/Baseband-guard",
+        "script_url": "https://github.com/vc-teahouse/Baseband-guard/raw/main/setup.sh",
+        "note": "上游 setup.sh 全自动且幂等：clone 到 kernel 树 + 建 security/baseband-guard 软链 + 写 Makefile/Kconfig 条目。现代 LSM 内核（GKI 全部满足，#define DEFINE_LSM(lsm) 存在）会自动跳过 selinux 补丁，无需额外操作。"
+      },
+      "config": {
+        "enable": [
+          "CONFIG_BBG"
+        ],
+        "lsm_append": "baseband_guard",
+        "note": "除了 CONFIG_BBG=y，还必须把 baseband_guard 追加进 CONFIG_LSM 的 default 列表，否则 LSM 框架不会调用它。"
+      },
+      "kmi_support": {
+        "all": true,
+        "note": "6 个 KMI + 6.18 全部支持：现代 LSM 框架自 5.1 起具备，GKI ≥5.10 天然满足。"
+      }
+    },
+    {
+      "id": "networking",
+      "name": "网络增强",
+      "input": "feature_networking",
+      "default": false,
+      "risk": "medium",
+      "kind": "patch_series",
+      "desc": "BBRv3 拥塞控制（改善移动网络下的吞吐/延迟）+ IPSet 全家桶（配合 iptables/ipset 做规则集，透明代理/防火墙常用）+ Qdisc 多队列调度 + CIFS 网络文件系统支持。",
+      "source": {
+        "type": "github_raw",
+        "repo": "WildKernels/kernel_patches",
+        "ref": "main",
+        "base_path": "common/bbrv3",
+        "note": "来自 WildKernels/kernel_patches 的 BBRv3 backport 补丁。5.10 还需两个前置 sysctl API 补丁（proc_dou8vec_minmax）。"
+      },
+      "patches": {
+        "5.10": {
+          "prereq": [
+            "sysctl_add_proc_dou8vec_minmax.patch",
+            "sysctl_fix_data-races_in_proc_dou8vec_minmax.patch"
+          ],
+          "main": "0001-net-tcp-backport-BBRv3-to-android12-5.10.patch"
+        },
+        "5.15": {
+          "main": "0001-net-tcp-backport-BBRv3-to-android13-5.15.patch"
+        },
+        "6.1": {
+          "main": "0001-net-tcp-backport-BBRv3-to-android14-6.1.patch"
+        },
+        "6.6": {
+          "main": "0001-net-tcp-backport-BBRv3-to-android15-6.6.patch"
+        },
+        "6.12": {
+          "main": "0001-net-tcp-backport-BBRv3-to-android16-6.12.patch",
+          "note": "上游有 6.12 补丁，但 WildKernels 已在部分下游禁用它；本流程先 dry-run，失败则整体跳过并 warning，不中断构建。"
+        }
+      },
+      "config": {
+        "enable": [
+          "CONFIG_TCP_CONG_BBR",
+          "CONFIG_NET_SCH_FQ_CODEL",
+          "CONFIG_NET_SCH_FQ",
+          "CONFIG_NET_SCH_CAKE",
+          "CONFIG_IP_SET",
+          "CONFIG_IP_SET_BITMAP_IP",
+          "CONFIG_IP_SET_BITMAP_IPMAC",
+          "CONFIG_IP_SET_BITMAP_PORT",
+          "CONFIG_IP_SET_HASH_IP",
+          "CONFIG_IP_SET_HASH_IPMARK",
+          "CONFIG_IP_SET_HASH_IPPORT",
+          "CONFIG_IP_SET_HASH_IPPORTIP",
+          "CONFIG_IP_SET_HASH_IPPORTNET",
+          "CONFIG_IP_SET_HASH_IPMAC",
+          "CONFIG_IP_SET_HASH_MAC",
+          "CONFIG_IP_SET_HASH_NET",
+          "CONFIG_IP_SET_HASH_NETNET",
+          "CONFIG_IP_SET_HASH_NETPORT",
+          "CONFIG_IP_SET_HASH_NETIFACE",
+          "CONFIG_IP_SET_LIST_SET",
+          "CONFIG_NETFILTER_XT_SET",
+          "CONFIG_CIFS"
+        ],
+        "note": "配置项一律走 cfg_has 存在性检查，本内核没有的自动跳过（各 KMI 差异很大）。默认拥塞算法不强制改成 BBR —— 改默认算法属于 kernel_tweaks 的 smart 档管辖，避免两个开关打架。"
+      },
+      "kmi_support": {
+        "5.10": true,
+        "5.15": true,
+        "6.1": true,
+        "6.6": true,
+        "6.12": "partial",
+        "6.18": false,
+        "note": "6.12 补丁可用性存疑（dry-run 决定）；6.18 上游无 backport，直接跳过。"
+      }
+    },
+    {
+      "id": "zram_lz4kd",
+      "name": "ZRAM LZ4KD 增强",
+      "input": "feature_zram_lz4",
+      "default": false,
+      "risk": "medium",
+      "kind": "patch_series",
+      "desc": "把 ZRAM / ZSMALLOC 由模块（=m）改为编入内核（=y），并引入 LZ4KD / LZ4K 压缩算法（比默认 LZO/LZ4 更省内存、更快）。安卓小内存机型收益明显。",
+      "source": {
+        "type": "github_raw",
+        "repo": "ShirkNeko/SukiSU_patch",
+        "ref": "main",
+        "base_path": "other/zram",
+        "note": "补丁按内核版本分目录：zram_patch/<kv>/lz4kd.patch 与 lz4k_oplus.patch。另有整棵 lz4k / lz4k_oplus 源码树可拷贝。"
+      },
+      "patches": {
+        "5.10": {
+          "dir": "other/zram/zram_patch/5.10",
+          "files": [
+            "lz4kd.patch"
+          ]
+        },
+        "5.15": {
+          "dir": "other/zram/zram_patch/5.15",
+          "files": [
+            "lz4kd.patch"
+          ]
+        },
+        "6.1": {
+          "dir": "other/zram/zram_patch/6.1",
+          "files": [
+            "lz4kd.patch"
+          ]
+        },
+        "6.6": {
+          "dir": "other/zram/zram_patch/6.6",
+          "files": [
+            "lz4kd.patch"
+          ]
+        }
+      },
+      "config": {
+        "enable": [
+          "CONFIG_ZRAM",
+          "CONFIG_ZSMALLOC",
+          "CONFIG_CRYPTO_LZ4",
+          "CONFIG_CRYPTO_LZ4HC",
+          "CONFIG_ZRAM_DEF_COMP_LZ4"
+        ],
+        "set": {
+          "CONFIG_ZRAM": "y",
+          "CONFIG_ZSMALLOC": "y",
+          "CONFIG_ZRAM_DEF_COMP_LZ4KD": "y"
+        },
+        "note": "ZRAM_DEF_COMP_LZ4KD 是补丁引入的新符号，只在补丁成功后才存在，走 cfg_has 检查。modules.bzl 里的 ZRAM/ZSMALLOC 模块条目需要在 6.12 之前的版本里移除以避免重复编入。"
+      },
+      "kmi_support": {
+        "5.10": true,
+        "5.15": true,
+        "6.1": true,
+        "6.6": true,
+        "6.12": false,
+        "6.18": false,
+        "note": "上游只提供 5.10 / 5.15 / 6.1 / 6.6 四个版本的补丁，6.12 与 6.18 无补丁，直接跳过。"
+      }
+    },
+    {
+      "id": "fail_logs",
+      "name": "编译失败日志收集",
+      "input": "collect_fail_logs",
+      "default": true,
+      "risk": "low",
+      "kind": "observability",
+      "desc": "编译失败时自动收集关键信息（构建配置摘要 / 内核与 KSU 源码版本 / 磁盘占用 / ccache 统计 / 最后若干行编译输出）打包成 artifact 上传，省去翻原始 Actions 日志。",
+      "source": {
+        "type": "builtin",
+        "note": "不依赖任何上游，纯本地实现。"
+      },
+      "kmi_support": {
+        "all": true
+      }
+    }
+  ],
+
+  "_kmi_support_note": "kmi_support 的取值：true=支持并应用；false=跳过（打印 notice 说明原因，不中断构建）；\"partial\"=先 dry-run 补丁，失败则跳过；{\"all\": true}=全部 KMI 支持。本文件是唯一真源，apply-extras.sh 读它决定每个 KMI 跑什么。"
+}

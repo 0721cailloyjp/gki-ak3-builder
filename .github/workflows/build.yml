@@ -1,4 +1,4 @@
-name: Build GKI Kernel + AnyKernel3
+name: 构建内核（GKI + AnyKernel3）
 
 # 手动触发，一次只编一个 KMI / 一个 root 方案，避免大批量 CI 与风控。
 on:
@@ -12,11 +12,6 @@ on:
         options:
           - builtin
           - lkm
-      feature_kpm:
-        description: "【仅 SukiSU-Ultra】启用 KPM 内核补丁模块（运行时加载 .kpm 扩展内核功能；上游警告可能影响系统稳定性）"
-        required: true
-        type: boolean
-        default: false
       root_solution:
         description: "root 方案（KSU 系列，均为正式主流项目）"
         required: true
@@ -43,23 +38,28 @@ on:
           - android16-6.12
           - android17-6.12
           - android17-6.18
-      kernel_branch:
-        description: "AOSP kernel/common 分支（默认用 lts；也可填 android15-6.6-2026-10 这类月度分支）"
-        required: false
-        type: string
-        default: ""
-      solution_ref:
-        description: "root 源码引用（分支/tag/commit，留空=用配置里的默认分支）"
-        required: false
-        type: string
-        default: ""
-      enable_susfs:
-        description: "集成 SUSFS 内核补丁"
+      feature_kpm:
+        description: "【仅 SukiSU-Ultra】启用 KPM 内核补丁模块（运行时加载 .kpm 扩展内核功能；上游警告可能影响系统稳定性）"
         required: true
         type: boolean
-        default: true
-      skip_on_patch_failure:
-        description: "补丁失败时跳过而不中断构建"
+        default: false
+      feature_bbg:
+        description: "【附加】BBG 防格机（Baseband-guard LSM，拦截对基带/efisp 等关键分区的非法写入）"
+        required: true
+        type: boolean
+        default: false
+      feature_networking:
+        description: "【附加】网络增强（BBRv3 拥塞控制 + IPSet 全家桶 + Qdisc + CIFS；6.18 无补丁会自动跳过）"
+        required: true
+        type: boolean
+        default: false
+      feature_zram_lz4:
+        description: "【附加】ZRAM LZ4KD 增强（ZRAM/ZSMALLOC 编入内核 + LZ4KD 压缩；仅 5.10~6.6 有补丁）"
+        required: true
+        type: boolean
+        default: false
+      collect_fail_logs:
+        description: "【附加】编译失败时收集日志并上传 artifact（排错用，建议保持开启）"
         required: true
         type: boolean
         default: true
@@ -72,6 +72,26 @@ on:
           - none
           - safe
           - smart
+      enable_susfs:
+        description: "集成 SUSFS 内核补丁"
+        required: true
+        type: boolean
+        default: true
+      skip_on_patch_failure:
+        description: "补丁失败时跳过而不中断构建"
+        required: true
+        type: boolean
+        default: true
+      kernel_branch:
+        description: "AOSP kernel/common 分支（默认用 lts；也可填 android15-6.6-2026-10 这类月度分支）"
+        required: false
+        type: string
+        default: ""
+      solution_ref:
+        description: "root 源码引用（分支/tag/commit，留空=用配置里的默认分支）"
+        required: false
+        type: string
+        default: ""
       make_release:
         description: "构建成功后创建 Release"
         required: true
@@ -164,6 +184,10 @@ jobs:
         env:
           IN_MODE: ${{ inputs.build_mode }}
           IN_KPM: ${{ inputs.feature_kpm }}
+          IN_BBG: ${{ inputs.feature_bbg }}
+          IN_NET: ${{ inputs.feature_networking }}
+          IN_ZRAM: ${{ inputs.feature_zram_lz4 }}
+          IN_FAILOG: ${{ inputs.collect_fail_logs }}
           IN_SOL: ${{ inputs.root_solution }}
           IN_KMI: ${{ inputs.kmi }}
           IN_BRANCH: ${{ inputs.kernel_branch }}
@@ -173,7 +197,6 @@ jobs:
           IN_TWEAKS: ${{ inputs.kernel_tweaks }}
         run: |
           echo "构建模式      : ${IN_MODE}"
-          echo "KPM           : ${IN_KPM}（仅 SukiSU-Ultra 有效）"
           echo "root 方案     : ${IN_SOL}"
           echo "KMI           : ${IN_KMI}"
           echo "kernel branch : ${IN_BRANCH:-（auto -> lts）}"
@@ -181,6 +204,15 @@ jobs:
           echo "SUSFS         : ${IN_SUSFS}"
           echo "skip on fail  : ${IN_SKIP}"
           echo "内核调优      : ${IN_TWEAKS}"
+          echo "--- 附加功能（仅 builtin 模式生效）---"
+          echo "KPM           : ${IN_KPM}（仅 SukiSU-Ultra 有效）"
+          echo "BBG 防格机    : ${IN_BBG}"
+          echo "网络增强      : ${IN_NET}"
+          echo "ZRAM LZ4KD    : ${IN_ZRAM}"
+          echo "失败日志收集  : ${IN_FAILOG}"
+          echo "--- 附加功能支持矩阵（来自 config/kernel-extras.json）---"
+          EXTRAS_JSON="$GITHUB_WORKSPACE/config/kernel-extras.json" \
+            bash "$GITHUB_WORKSPACE/scripts/apply-extras.sh" list || true
 
       # KMI → AOSP 分支的映射来自 config/kmi-matrix.json 的 branch 字段（唯一真源）。
       # 不要用 "<kmi>-lts" 硬推导：android17-6.18 的分支名没有 -lts 后缀，
@@ -458,6 +490,86 @@ jobs:
           fi
           echo "SUSFS applied (kernel side)."
 
+      # =====================================================================
+      # 附加内核功能（非 root 必需，全部默认关闭，配置在 config/kernel-extras.json）
+      #
+      # 执行时机很关键：这三项都会【改内核源码树 / defconfig】，
+      # 必须在 olddefconfig 之前完成。放在 SUSFS 之后、配置内核之前。
+      #
+      # 支持矩阵由 apply-extras.sh 读 JSON 决定，workflow 里【不硬编码】
+      # 任何 KMI / 版本判断。
+      # =====================================================================
+
+      - name: 附加功能 - BBG 防格机
+        if: ${{ inputs.build_mode == 'builtin' && inputs.feature_bbg }}
+        working-directory: gki
+        continue-on-error: true
+        env:
+          KV_ENV: ${{ steps.kmi.outputs.kv }}
+        run: |
+          echo "==> BBG 防格机（Baseband-guard LSM）"
+          EXTRAS_JSON="$GITHUB_WORKSPACE/config/kernel-extras.json" \
+          EXTRAS_STATE_DIR="$GITHUB_WORKSPACE/.extras-state" \
+            bash "$GITHUB_WORKSPACE/scripts/apply-extras.sh" bbg "$KV_ENV" "$(pwd)" || \
+            echo "::warning::BBG 应用过程异常，但不中断构建（BBG 属增强项）"
+
+      - name: 附加功能 - 网络增强（BBRv3 / IPSet / Qdisc / CIFS）
+        if: ${{ inputs.build_mode == 'builtin' && inputs.feature_networking }}
+        working-directory: gki
+        continue-on-error: true
+        env:
+          KV_ENV: ${{ steps.kmi.outputs.kv }}
+        run: |
+          echo "==> 网络增强"
+          EXTRAS_JSON="$GITHUB_WORKSPACE/config/kernel-extras.json" \
+          EXTRAS_STATE_DIR="$GITHUB_WORKSPACE/.extras-state" \
+            bash "$GITHUB_WORKSPACE/scripts/apply-extras.sh" networking "$KV_ENV" "$(pwd)" || \
+            echo "::warning::网络增强应用过程异常，但不中断构建"
+
+      - name: 附加功能 - ZRAM LZ4KD 增强
+        if: ${{ inputs.build_mode == 'builtin' && inputs.feature_zram_lz4 }}
+        working-directory: gki
+        continue-on-error: true
+        env:
+          KV_ENV: ${{ steps.kmi.outputs.kv }}
+        run: |
+          echo "==> ZRAM LZ4KD 增强"
+          EXTRAS_JSON="$GITHUB_WORKSPACE/config/kernel-extras.json" \
+          EXTRAS_STATE_DIR="$GITHUB_WORKSPACE/.extras-state" \
+            bash "$GITHUB_WORKSPACE/scripts/apply-extras.sh" zram "$KV_ENV" "$(pwd)" || \
+            echo "::warning::ZRAM LZ4KD 应用过程异常，但不中断构建"
+
+      - name: 附加功能 - 汇总
+        if: ${{ inputs.build_mode == 'builtin' }}
+        run: |
+          echo "==> 附加功能决策汇总（.extras-state/）"
+          if [ -d "$GITHUB_WORKSPACE/.extras-state" ]; then
+            for f in "$GITHUB_WORKSPACE"/.extras-state/*.state; do
+              [ -f "$f" ] || continue
+              echo "--- $(basename "$f" .state) ---"
+              cat "$f"
+            done
+          else
+            echo "（本次没有启用任何附加功能）"
+          fi
+          # 写入 step summary 便于回看
+          {
+            echo "### 附加功能"
+            echo
+            echo "| 功能 | 结果 |"
+            echo "|---|---|"
+            if [ -d "$GITHUB_WORKSPACE/.extras-state" ]; then
+              for f in "$GITHUB_WORKSPACE"/.extras-state/*.state; do
+                [ -f "$f" ] || continue
+                n="$(basename "$f" .state)"
+                a="$(grep -oE 'applied=[^ ]+' "$f" | head -1 | cut -d= -f2)"
+                r="$(grep -oE 'reason=.*' "$f" | head -1 | cut -d= -f2-)"
+                echo "| $n | ${a:-?} (${r:-?}) |"
+              done
+            fi
+            echo
+          } >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+
       - name: 配置内核（built-in：CONFIG_KSU=y）
         if: ${{ inputs.build_mode == 'builtin' }}
         working-directory: gki
@@ -469,6 +581,9 @@ jobs:
           SOL_ALWAYS_ENV: ${{ steps.sol.outputs.sol_always_enable }}
           SOL_OPT_JSON_ENV: ${{ steps.sol.outputs.sol_optional_features }}
           FEAT_KPM_ENV: ${{ inputs.feature_kpm }}
+          FEAT_BBG_ENV: ${{ inputs.feature_bbg }}
+          FEAT_NET_ENV: ${{ inputs.feature_networking }}
+          FEAT_ZRAM_ENV: ${{ inputs.feature_zram_lz4 }}
         run: |
           echo "==> gki_defconfig"
           make ARCH=arm64 $LLVM_MAKE_ARGS gki_defconfig
@@ -653,13 +768,82 @@ jobs:
             esac
           fi
 
+          # --- 断言附加功能配置真的生效（BBG / 网络增强 / ZRAM）---
+          # 这些符号要么来自补丁、要么来自内核自身 defconfig，一律走 cfg_has
+          # 存在性检查：不存在即视为「本 KMI 不支持」，正常跳过。
+          # 只有「用户开启了、补丁也成功应用、但符号却没生效」才值得报 warning。
+          echo "--- 附加功能生效情况 ---"
+          extras_state() {
+            # $1 = 状态名；返回 "applied值|reason值"
+            local f="$GITHUB_WORKSPACE/.extras-state/$1.state"
+            [ -f "$f" ] || { echo "unknown|no-state"; return 0; }
+            local a r
+            a="$(grep -oE 'applied=[^ ]+' "$f" | head -1 | cut -d= -f2)"
+            r="$(grep -oE 'reason=.*' "$f" | head -1 | cut -d= -f2-)"
+            echo "${a:-?}|${r:-?}"
+          }
+
+          if [ "${FEAT_BBG_ENV:-false}" = "true" ]; then
+            st="$(extras_state bbg)"
+            echo "    BBG 状态: $st"
+            case "$st" in
+              true*) 
+                cfg_st="$(scripts/config --file .config --state BBG 2>/dev/null || echo undef)"
+                echo "    BBG = $cfg_st"
+                [ "$cfg_st" = "undef" ] && echo "::warning::BBG 补丁已应用但 CONFIG_BBG 未生效（可能被 Kconfig 依赖挡住）"
+                grep -E "^CONFIG_LSM=" .config || true
+                ;;
+              *) echo "    BBG 未应用（$st），跳过断言" ;;
+            esac
+          fi
+
+          if [ "${FEAT_NET_ENV:-false}" = "true" ]; then
+            st="$(extras_state networking)"
+            echo "    网络增强状态: $st"
+            case "$st" in
+              true*)
+                for sym in NET_SCH_FQ_CODEL IP_SET NETFILTER_XT_SET CIFS; do
+                  cfg_st="$(scripts/config --file .config --state "$sym" 2>/dev/null || echo undef)"
+                  echo "      $sym = $cfg_st"
+                done
+                ;;
+              *) echo "    网络增强未应用（$st），跳过断言" ;;
+            esac
+          fi
+
+          if [ "${FEAT_ZRAM_ENV:-false}" = "true" ]; then
+            st="$(extras_state zram)"
+            echo "    ZRAM 状态: $st"
+            case "$st" in
+              true*)
+                for sym in ZRAM ZSMALLOC; do
+                  cfg_st="$(scripts/config --file .config --state "$sym" 2>/dev/null || echo undef)"
+                  echo "      $sym = $cfg_st"
+                  [ "$cfg_st" = "undef" ] && echo "::warning::$sym 未生效"
+                done
+                ;;
+              *) echo "    ZRAM 未应用（$st），跳过断言" ;;
+            esac
+          fi
+
       - name: 编译内核
+        id: compile
         if: ${{ inputs.build_mode == 'builtin' }}
         working-directory: gki
+        env:
+          FAILOG_ENV: ${{ inputs.collect_fail_logs }}
         run: |
           echo "==> 开始编译（预计 40-150 分钟）"
           nproc
-          make ARCH=arm64 $LLVM_MAKE_ARGS -j"$(nproc)" Image
+          LOG="$GITHUB_WORKSPACE/build-logs/compile.log"
+          if [ "$FAILOG_ENV" = "true" ]; then
+            mkdir -p "$GITHUB_WORKSPACE/build-logs"
+            # 用 pipefail + tee：既实时看到输出，又把全量日志留档供失败收集。
+            set -o pipefail
+            make ARCH=arm64 $LLVM_MAKE_ARGS -j"$(nproc)" Image 2>&1 | tee "$LOG"
+          else
+            make ARCH=arm64 $LLVM_MAKE_ARGS -j"$(nproc)" Image
+          fi
           echo "==> 编译完成"
           ls -la arch/arm64/boot/Image
           du -h arch/arm64/boot/Image
@@ -685,14 +869,28 @@ jobs:
       # 同样生效（用的是源码仓库的 .git），所以依然必须完整克隆。
       # ---------------------------------------------------------------------
       - name: 编译 LKM 模块（kernelsu.ko）
+        id: compile_lkm
         if: ${{ inputs.build_mode == 'lkm' }}
+        env:
+          FAILOG_ENV: ${{ inputs.collect_fail_logs }}
         run: |
           chmod +x scripts/build-lkm.sh
-          bash scripts/build-lkm.sh \
-            "${{ steps.kmi.outputs.kmi }}" \
-            "$(pwd)/gki" \
-            "$(pwd)/ksu-src" \
-            "$(pwd)/lkm-out"
+          LOG="$GITHUB_WORKSPACE/build-logs/compile-lkm.log"
+          if [ "$FAILOG_ENV" = "true" ]; then
+            mkdir -p "$GITHUB_WORKSPACE/build-logs"
+            set -o pipefail
+            bash scripts/build-lkm.sh \
+              "${{ steps.kmi.outputs.kmi }}" \
+              "$(pwd)/gki" \
+              "$(pwd)/ksu-src" \
+              "$(pwd)/lkm-out" 2>&1 | tee "$LOG"
+          else
+            bash scripts/build-lkm.sh \
+              "${{ steps.kmi.outputs.kmi }}" \
+              "$(pwd)/gki" \
+              "$(pwd)/ksu-src" \
+              "$(pwd)/lkm-out"
+          fi
 
           echo "--- LKM 产物 ---"
           find lkm-out -name '*_kernelsu.ko' -exec ls -la {} \;
@@ -704,6 +902,47 @@ jobs:
           name: ${{ steps.sol.outputs.sol_name }}-GKI-${{ inputs.kmi }}-LKM
           path: lkm-out/**/*_kernelsu.ko
           if-no-files-found: error
+
+      # =====================================================================
+      # 编译失败时的日志收集（always() + 编译步骤失败才跑）
+      #
+      # 目的：编译挂了以后不用翻几千行原始 Actions 日志 —— 自动把
+      #   构建参数摘要 / 内核与 KSU 版本 / 磁盘与 ccache 统计 / 编译日志尾部
+      # 打包成 artifact。所有值走 env:，不内联 ${{ }}。
+      # =====================================================================
+      - name: 收集编译失败日志
+        if: ${{ always() && inputs.collect_fail_logs && (steps.compile.outcome == 'failure' || steps.compile_lkm.outcome == 'failure') }}
+        env:
+          E_MODE: ${{ inputs.build_mode }}
+          E_SOL: ${{ inputs.root_solution }}
+          E_KMI: ${{ inputs.kmi }}
+          E_BRANCH: ${{ steps.kmi.outputs.branch }}
+          E_REF: ${{ inputs.solution_ref }}
+          E_SUSFS: ${{ inputs.enable_susfs }}
+          E_TWEAKS: ${{ inputs.kernel_tweaks }}
+          E_KPM: ${{ inputs.feature_kpm }}
+          E_BBG: ${{ inputs.feature_bbg }}
+          E_NET: ${{ inputs.feature_networking }}
+          E_ZRAM: ${{ inputs.feature_zram_lz4 }}
+        run: |
+          echo "==> 检测到编译失败，开始收集日志"
+          chmod +x scripts/collect-fail-logs.sh || true
+          OUT="$GITHUB_WORKSPACE/build-logs"
+          bash scripts/collect-fail-logs.sh \
+            "$OUT" \
+            "$GITHUB_WORKSPACE/build-logs/compile.log" \
+            "$GITHUB_WORKSPACE/build-logs/compile-lkm.log" || true
+          echo "--- 收集结果 ---"
+          ls -la "$OUT" || true
+
+      - name: 上传编译失败日志
+        if: ${{ always() && inputs.collect_fail_logs && (steps.compile.outcome == 'failure' || steps.compile_lkm.outcome == 'failure') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.sol.outputs.sol_name }}-${{ inputs.kmi }}-失败日志
+          path: build-logs/
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: 准备 AK3 打包目录
         if: ${{ inputs.build_mode == 'builtin' }}
@@ -1035,10 +1274,27 @@ jobs:
           E_SOL_REF: ${{ steps.sol.outputs.sol_ref }}
           E_SUSFS: ${{ inputs.enable_susfs }}
           E_TWEAKS: ${{ inputs.kernel_tweaks }}
+          E_BBG: ${{ inputs.feature_bbg }}
+          E_NET: ${{ inputs.feature_networking }}
+          E_ZRAM: ${{ inputs.feature_zram_lz4 }}
+          E_KPM: ${{ inputs.feature_kpm }}
           E_MGR_VER: ${{ steps.manager.outputs.manager_version }}
           E_MGR_CODE: ${{ steps.manager.outputs.manager_version_code }}
         run: |
           SOL_REF_RESOLVED="${E_REF:-${E_SOL_REF}}"
+          # 附加功能生效情况（读 .extras-state，无则显示未启用）
+          extras_line() {
+            local st="$GITHUB_WORKSPACE/.extras-state/$1.state"
+            if [ -f "$st" ]; then
+              local a; a="$(grep -oE 'applied=[^ ]+' "$st" | head -1 | cut -d= -f2)"
+              if [ "$a" = "true" ]; then echo "已启用"; else
+                local r; r="$(grep -oE 'reason=.*' "$st" | head -1 | cut -d= -f2-)"
+                echo "跳过（${r:-?}）"
+              fi
+            else
+              echo "未启用"
+            fi
+          }
           {
             echo "# ${E_SOL_NAME} GKI Build"
             echo ""
@@ -1051,6 +1307,10 @@ jobs:
             echo "| 源码 ref | \`${SOL_REF_RESOLVED}\` |"
             echo "| SUSFS | \`${E_SUSFS}\` |"
             echo "| 内核调优 | \`${E_TWEAKS}\` |"
+            echo "| BBG 防格机 | $(extras_line bbg) |"
+            echo "| 网络增强 | $(extras_line networking) |"
+            echo "| ZRAM LZ4KD | $(extras_line zram) |"
+            echo "| KPM | \`${E_KPM}\` |"
             echo "| Manager 版本 | \`${E_MGR_VER:-未获取}\` |"
             echo "| Manager versionCode | \`${E_MGR_CODE:--}\` |"
             echo ""
