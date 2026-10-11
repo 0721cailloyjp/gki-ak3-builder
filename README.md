@@ -38,19 +38,39 @@
 
 ## 支持的 KMI
 
-≥ **5.10** 的全部 GKI 主线：
+≥ **5.10** 的全部 GKI 主线（含 Android 17）：
 
-| KMI | kernel | Android | AOSP 分支 |
-|---|---|---|---|
-| `android12-5.10` | 5.10 | 12 | `android12-5.10-lts` |
-| `android13-5.10` | 5.10 | 13 | `android13-5.10-lts` |
-| `android13-5.15` | 5.15 | 13 | `android13-5.15-lts` |
-| `android14-5.15` | 5.15 | 14 | `android14-5.15-lts` |
-| `android14-6.1` | 6.1 | 14 | `android14-6.1-lts` |
-| `android15-6.6` | 6.6 | 15 | `android15-6.6-lts` |
-| `android16-6.12` | 6.12 | 16 | `android16-6.12-lts` |
+| KMI | kernel | Android | AOSP 分支 | 备注 |
+|---|---|---|---|---|
+| `android12-5.10` | 5.10 | 12 | `android12-5.10-lts` | |
+| `android13-5.10` | 5.10 | 13 | `android13-5.10-lts` | |
+| `android13-5.15` | 5.15 | 13 | `android13-5.15-lts` | |
+| `android14-5.15` | 5.15 | 14 | `android14-5.15-lts` | |
+| `android14-6.1` | 6.1 | 14 | `android14-6.1-lts` | |
+| `android15-6.6` | 6.6 | 15 | `android15-6.6-lts` | |
+| `android16-6.12` | 6.12 | 16 | `android16-6.12-lts` | |
+| `android17-6.12` | 6.12 | **17** | `android16-6.12-lts` | **跨代**：A17 系统沿用 6.12 内核 |
+| `android17-6.18` | 6.18 | **17** | `android17-6.18` | A17 原生新内核（分支名**无** `-lts` 后缀） |
 
-分支表见 [`config/kmi-matrix.json`](config/kmi-matrix.json)。
+分支表见 [`config/kmi-matrix.json`](config/kmi-matrix.json)，`branch` 字段是唯一真源。
+
+### 关于 Android 17
+
+Android 版本与内核版本**不是一一对应**的，所以 A17 有两个 target：
+
+| 你的设备 | 选哪个 KMI |
+|---|---|
+| A17 系统，`uname -r` 显示 **6.12.x** | `android17-6.12` |
+| A17 系统，`uname -r` 显示 **6.18.x** | `android17-6.18` |
+
+**怎么确认**：在 adb shell 里敲 `uname -r`，取前面 `主.次` 两位（如 `6.12.69` → `6.12`）。
+
+> `android17-6.12` 与 `android16-6.12` 编译产物**同源**（都用 `android16-6.12-lts` 分支），
+> 差别只在包名与 KMI 标记。所以 A17+6.12 的设备，用这两者任一都能刷。
+
+**SUSFS 在 Android 17 上不可用**：上游 `ShirkNeko/susfs4ksu` 目前最高只有
+`gki-android15-6.6`，**没有 6.12 也没有 6.18 分支**。开到 6.12/6.18 时工作流会
+自动检测并跳过 SUSFS（日志会明确提示），root 功能本身不受影响。
 
 ## 怎么用
 
@@ -259,7 +279,7 @@ bool is_manager_apk(char *path)
 | 闸门 | 检查 | 不符后果 |
 |---|---|---|
 | A1 架构 | `ro.product.cpu.abi` 必须是 `arm64*` / `aarch64` | 直接中止 |
-| A2 内核主版本 | 设备 `/proc/version` 的主版本号必须**等于**包内内核（5.10 / 5.15 / 6.1 / 6.6 / 6.12） | 直接中止 |
+| A2 内核主版本 | 设备 `/proc/version` 的主版本号必须**等于**包内内核（5.10 / 5.15 / 6.1 / 6.6 / 6.12 / 6.18） | 直接中止 |
 | A3 分区 | `boot` 或 `init_boot` 至少一个存在且可读 | 直接中止 |
 
 设计原则是**宁可刷不进去，也绝不刷错变砖**。AK3 自带的 `do_check_boot_version`

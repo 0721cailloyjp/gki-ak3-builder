@@ -1,6 +1,12 @@
 {
-  "_comment": "GKI KMI matrix for >= 5.10. branch = AOSP android.googlesource.com/kernel/common branch name.",
-  "_verified": "2026-10-11 from android.googlesource.com/kernel/common/+refs",
+  "_comment": "GKI KMI matrix for >= 5.10. field 'branch' is the AOSP android.googlesource.com/kernel/common branch name and is the SINGLE SOURCE OF TRUTH for which branch to check out (do NOT derive it as '<name>-lts': android17-6.18 has no -lts branch).",
+  "_verified": "2026-10-11 via aosp-mirror/kernel_common branch list",
+  "_notes": [
+    "cross_gen=true 表示「跨代」target：手机升级到新一代 Android，但内核仍沿用上一代 KMI。",
+    "android17-6.12 是跨代 target，其 ACK 分支就是 android16-6.12-lts（与 android16-6.12 完全同源）。",
+    "android17-6.18 是 Android 17 的原生新内核代际，ACK 分支名没有 -lts 后缀（6.18 刚发布，lts 分支尚未独立）。",
+    "上游 FinaSU 已在 kernel/Kbuild 里为 6.18 做适配（注释：'6.18 exports the external module source as srcroot when M/MO are used'）。"
+  ],
   "kmi": [
     {
       "name": "android12-5.10",
@@ -8,6 +14,7 @@
       "android_version": "android12",
       "branch": "android12-5.10-lts",
       "monthly_example": "android12-5.10-2026-10",
+      "cross_gen": false,
       "defconfig": "gki_defconfig",
       "clang": true,
       "lto_off_required": true
@@ -18,6 +25,7 @@
       "android_version": "android13",
       "branch": "android13-5.10-lts",
       "monthly_example": "android13-5.10-2026-10",
+      "cross_gen": false,
       "defconfig": "gki_defconfig",
       "clang": true,
       "lto_off_required": true
@@ -28,6 +36,7 @@
       "android_version": "android13",
       "branch": "android13-5.15-lts",
       "monthly_example": "android13-5.15-2026-09",
+      "cross_gen": false,
       "defconfig": "gki_defconfig",
       "clang": true,
       "lto_off_required": true
@@ -38,6 +47,7 @@
       "android_version": "android14",
       "branch": "android14-5.15-lts",
       "monthly_example": "android14-5.15-2026-10",
+      "cross_gen": false,
       "defconfig": "gki_defconfig",
       "clang": true,
       "lto_off_required": true
@@ -48,6 +58,7 @@
       "android_version": "android14",
       "branch": "android14-6.1-lts",
       "monthly_example": "android14-6.1-2026-09",
+      "cross_gen": false,
       "defconfig": "gki_defconfig",
       "clang": true,
       "lto_off_required": true
@@ -58,6 +69,7 @@
       "android_version": "android15",
       "branch": "android15-6.6-lts",
       "monthly_example": "android15-6.6-2026-10",
+      "cross_gen": false,
       "defconfig": "gki_defconfig",
       "clang": true,
       "lto_off_required": true
@@ -68,6 +80,29 @@
       "android_version": "android16",
       "branch": "android16-6.12-lts",
       "monthly_example": "android16-6.12-2026-09",
+      "cross_gen": false,
+      "defconfig": "gki_defconfig",
+      "clang": true,
+      "lto_off_required": true
+    },
+    {
+      "name": "android17-6.12",
+      "kernel_version": "6.12",
+      "android_version": "android17",
+      "branch": "android16-6.12-lts",
+      "monthly_example": "android16-6.12-2026-09",
+      "cross_gen": true,
+      "defconfig": "gki_defconfig",
+      "clang": true,
+      "lto_off_required": true
+    },
+    {
+      "name": "android17-6.18",
+      "kernel_version": "6.18",
+      "android_version": "android17",
+      "branch": "android17-6.18",
+      "monthly_example": "",
+      "cross_gen": false,
       "defconfig": "gki_defconfig",
       "clang": true,
       "lto_off_required": true

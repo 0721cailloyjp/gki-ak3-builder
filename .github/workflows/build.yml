@@ -16,7 +16,7 @@ on:
           - sukisu
           - kernelsu-next
       kmi:
-        description: "目标 KMI"
+        description: "目标 KMI（android17-6.12 = A17 手机仍用 6.12 内核；android17-6.18 = A17 原生 6.18）"
         required: true
         type: choice
         default: android15-6.6
@@ -28,6 +28,8 @@ on:
           - android14-6.1
           - android15-6.6
           - android16-6.12
+          - android17-6.12
+          - android17-6.18
       kernel_branch:
         description: "AOSP kernel/common 分支（默认用 lts；也可填 android15-6.6-2026-10 这类月度分支）"
         required: false
@@ -137,19 +139,46 @@ jobs:
           echo "skip on fail  : ${{ inputs.skip_on_patch_failure }}"
           echo "内核调优      : ${{ inputs.kernel_tweaks }}"
 
+      # KMI → AOSP 分支的映射来自 config/kmi-matrix.json 的 branch 字段（唯一真源）。
+      # 不要用 "<kmi>-lts" 硬推导：android17-6.18 的分支名没有 -lts 后缀，
+      # 而 android17-6.12 是跨代 target，分支其实是 android16-6.12-lts。
+      #
+      # 注意：这里刻意用 python3 -c 单行，不用 heredoc ——
+      # heredoc 里的代码若顶格写会破坏 `run: |` 块的缩进，导致 YAML 解析失败。
       - name: 解析 KMI 参数
         id: kmi
         run: |
           KMI="${{ inputs.kmi }}"
-          KV="${KMI##*-}"            # 6.6
-          AV="${KMI%%-*}"            # android15
+          KV="${KMI##*-}"            # 6.6 / 6.18
+          AV="${KMI%%-*}"            # android15 / android17
           BRANCH="${{ inputs.kernel_branch }}"
-          [ -n "$BRANCH" ] || BRANCH="${KMI}-lts"
-          echo "kmi=$KMI"        >> $GITHUB_OUTPUT
-          echo "kv=$KV"          >> $GITHUB_OUTPUT
-          echo "av=$AV"          >> $GITHUB_OUTPUT
-          echo "branch=$BRANCH"  >> $GITHUB_OUTPUT
-          echo "resolved: KMI=$KMI KV=$KV AV=$AV BRANCH=$BRANCH"
+          CROSS="false"
+
+          MATRIX_QUERY="import json,sys; d=json.load(open('config/kmi-matrix.json',encoding='utf-8')); e=[x for x in d.get('kmi',[]) if x.get('name')==sys.argv[1]]; print((e[0].get(sys.argv[2],'') if e else ''))"
+
+          if [ -z "$BRANCH" ]; then
+            BRANCH="$(python3 -c "$MATRIX_QUERY" "$KMI" branch 2>/dev/null || true)"
+            if [ -z "$BRANCH" ]; then
+              # 回退：仅对传统 <kmi>-lts 命名有效
+              BRANCH="${KMI}-lts"
+              echo "::warning::kmi-matrix.json 里没有 '$KMI'，回退到推导分支 $BRANCH"
+            fi
+          fi
+
+          # 跨代标记（如 android17-6.12 用的其实是 6.12 分支）
+          CROSS="$(python3 -c "$MATRIX_QUERY" "$KMI" cross_gen 2>/dev/null || true)"
+          [ -n "$CROSS" ] || CROSS="False"
+          case "$CROSS" in
+            True|true) CROSS="true" ;;
+            *)         CROSS="false" ;;
+          esac
+
+          echo "kmi=$KMI"         >> $GITHUB_OUTPUT
+          echo "kv=$KV"           >> $GITHUB_OUTPUT
+          echo "av=$AV"           >> $GITHUB_OUTPUT
+          echo "branch=$BRANCH"   >> $GITHUB_OUTPUT
+          echo "cross_gen=$CROSS" >> $GITHUB_OUTPUT
+          echo "resolved: KMI=$KMI KV=$KV AV=$AV BRANCH=$BRANCH CROSS_GEN=$CROSS"
 
       # GKI 内核必须用 Clang/LLVM 编译（make ... LLVM=1），且 AOSP 对版本有要求。
       # 关键点：ld.lld / llvm-ar / llvm-objcopy 等必须齐全，否则 kconfig 阶段就报
@@ -196,6 +225,10 @@ jobs:
               ;;
             *)
               echo "==> 较新 KMI，沿用系统 clang-${CLANG_VERSION:-?} 即可"
+              if [ "$KV" = "6.18" ]; then
+                echo "    注意：6.18 要求较新的 clang。ubuntu-24.04 默认 clang-18 通常可用；"
+                echo "    若后续因 clang 版本过低编译失败，可在此追加 clang-19/20 的安装。"
+              fi
               ;;
           esac
 
@@ -317,10 +350,31 @@ jobs:
         working-directory: gki
         continue-on-error: ${{ inputs.skip_on_patch_failure }}
         run: |
-          SUSFS_BRANCH="gki-${{ steps.kmi.outputs.av }}-${{ steps.kmi.outputs.kv }}"
-          echo "==> clone susfs4ksu @ $SUSFS_BRANCH"
+          # SUSFS 分支命名沿用「内核代际」而非 Android 版本：
+          #   6.12 用 gki-android16-6.12；6.18 尚无分支。
+          # 跨代 target（android17-6.12）必须按内核真实代际取分支，
+          # 否则会得到不存在的 gki-android17-6.12。
+          KV="${{ steps.kmi.outputs.kv }}"
+          case "$KV" in
+            5.10|5.15|6.1|6.6) SUF_AV="${{ steps.kmi.outputs.av }}" ;;
+            6.12)               SUF_AV="android16" ;;
+            6.18)               SUF_AV="android17" ;;
+            *)                  SUF_AV="${{ steps.kmi.outputs.av }}" ;;
+          esac
+          SUSFS_BRANCH="gki-${SUF_AV}-${KV}"
+          echo "==> SUSFS 分支推导: KMI=${{ inputs.kmi }} -> $SUSFS_BRANCH"
+
+          # 先探测上游是否真的有这个分支，避免用 clone 失败来表达「不支持」。
+          if ! git ls-remote --exit-code --heads "$SUSFS_REPO" "$SUSFS_BRANCH" >/dev/null 2>&1; then
+            echo "::notice::susfs4ksu 上游没有 $SUSFS_BRANCH 分支，本次跳过 SUSFS。"
+            echo "         上游现有 GKI 分支："
+            git ls-remote --heads "$SUSFS_REPO" 2>/dev/null | grep -o 'gki-[^/]*$' | sed 's/^/           - /' || true
+            echo "         说明：SUSFS 尚未适配内核 $KV，这与本流程无关，root 功能不受影响。"
+            exit 0
+          fi
+
           if ! git clone --depth=1 --branch "$SUSFS_BRANCH" "$SUSFS_REPO" /tmp/susfs4ksu; then
-            echo "::warning::susfs4ksu 无 $SUSFS_BRANCH 分支，跳过 SUSFS"
+            echo "::warning::clone susfs4ksu@$SUSFS_BRANCH 失败，跳过 SUSFS"
             exit 0
           fi
           PATCH="/tmp/susfs4ksu/kernel_patches/50_add_susfs_in_${SUSFS_BRANCH}.patch"
@@ -525,11 +579,11 @@ jobs:
           ui_print " " "  [防格机] 架构: $ARCH  OK"
 
           # A2) 设备内核主版本必须与包内内核一致
-          #     取主版本号为 5.10 / 5.15 / 6.1 / 6.6 / 6.12 这类
+          #     取主版本号为 5.10 / 5.15 / 6.1 / 6.6 / 6.12 / 6.18 这类
           DEV_KERNEL="$(cat /proc/version 2>/dev/null | awk -F '-' '{print $1}' | awk '{print $3}')"
           DEV_MAJMIN="$(echo "$DEV_KERNEL" | awk -F '.' '{print $1"."$2}')"
           case "$DEV_MAJMIN" in
-            5.10|5.15|6.1|6.6|6.12|6.1x) ;;
+            5.10|5.15|6.1|6.6|6.12|6.18) ;;
             *) abort "  设备内核 $DEV_MAJMIN 非受支持的 GKI 主线，已中止。" ;;
           esac
           ui_print " " "  [防格机] 设备内核: $DEV_MAJMIN  包内内核: $TARGET_KV"
