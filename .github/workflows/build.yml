@@ -141,12 +141,63 @@ jobs:
           echo "branch=$BRANCH"  >> $GITHUB_OUTPUT
           echo "resolved: KMI=$KMI KV=$KV AV=$AV BRANCH=$BRANCH"
 
+      # GKI 内核必须用 Clang/LLVM 编译（make ... LLVM=1），且 AOSP 对版本有要求。
+      # 关键点：ld.lld / llvm-ar / llvm-objcopy 等必须齐全，否则 kconfig 阶段就报
+      #   scripts/Kconfig.include:41: linker 'ld.lld' not found
+      # 这里装 Ubuntu 自带的 clang/lld（版本随 runner 升级，经验上 ubuntu-24.04 的
+      # clang-18 足够编 5.10~6.12）。同时装 ccache 加速后续重复构建。
       - name: 安装构建依赖
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             git curl wget zip unzip python3 bc bison flex \
-            libssl-dev libelf-dev cpio kmod rsync ccache
+            libssl-dev libelf-dev cpio kmod rsync ccache \
+            clang lld llvm libclang-dev
+
+          echo "=== 工具链版本 ==="
+          clang --version | head -2
+          ld.lld --version
+          llvm-ar --version | head -1
+          which clang ld.lld llvm-ar llvm-objcopy llvm-strip
+          echo "CLANG_VERSION=$(clang -dumpversion | cut -d. -f1)" >> "$GITHUB_ENV"
+
+      # 5.10 / 5.15 等较老的 KMI 对过新的 clang 可能不兼容（新版编译器默认更严格，
+      # 老内核会踩 -Werror 或 inline asm 约束问题）。这里按 KMI 决定是否降级到
+      # clang-14/15。默认保持系统版本，仅在老 KMI 上尝试降级；失败不致命，
+      # 因为后续编译步骤才是最终裁判。
+      - name: 按 KMI 选择工具链版本
+        continue-on-error: true
+        env:
+          KV: ${{ steps.kmi.outputs.kv }}
+        run: |
+          echo "目标内核: $KV ；当前 clang: ${CLANG_VERSION:-?}"
+          case "$KV" in
+            5.10|5.15)
+              echo "==> 老 KMI，尝试安装 clang-14（更保守）"
+              if sudo apt-get install -y --no-install-recommends clang-14 lld-14 2>/dev/null; then
+                echo "OK: clang-14 已安装，切换 LLVM 前缀为 -14 变体"
+                {
+                  echo "LLVM_SUFFIX=-14"
+                } >> "$GITHUB_ENV"
+                clang-14 --version | head -1
+              else
+                echo "::warning::clang-14 安装失败，沿用系统 clang"
+              fi
+              ;;
+            *)
+              echo "==> 较新 KMI，沿用系统 clang-${CLANG_VERSION:-?} 即可"
+              ;;
+          esac
+
+          # 统一算出 make 的 LLVM 参数：
+          #  - 默认 LLVM=1（让 Makefile 自动找 clang/ld.lld/llvm-* 该系列工具）
+          #  - 若降级到 clang-14，则显式给全套 -14 二进制，避免混用系统新版
+          if [ "${LLVM_SUFFIX:-}" = "-14" ]; then
+            echo "LLVM_MAKE_ARGS=LLVM=1 CC=clang-14 LD=ld.lld-14 AR=llvm-ar-14 NM=llvm-nm-14 OBJCOPY=llvm-objcopy-14 OBJDUMP=llvm-objdump-14 READELF=llvm-readelf-14 STRIP=llvm-strip-14" >> "$GITHUB_ENV"
+          else
+            echo "LLVM_MAKE_ARGS=LLVM=1" >> "$GITHUB_ENV"
+          fi
+          echo "LLVM_MAKE_ARGS 将用于所有 make 调用"
 
       - name: 拉取 AOSP GKI 内核源码
         run: |
@@ -299,7 +350,7 @@ jobs:
         working-directory: gki
         run: |
           echo "==> gki_defconfig"
-          make ARCH=arm64 LLVM=1 gki_defconfig
+          make ARCH=arm64 $LLVM_MAKE_ARGS gki_defconfig
 
           # GKI 默认开 LTO（THINLTO/FULL），会显著拖长编译并易 OOM；关掉。
           scripts/config --file .config -d LTO_CLANG -e LTO_NONE \
@@ -340,7 +391,7 @@ jobs:
           scripts/config --file .config -e KALLSYMS -e KALLSYMS_ALL || true
 
           echo "==> olddefconfig 归一化"
-          make ARCH=arm64 LLVM=1 olddefconfig
+          make ARCH=arm64 $LLVM_MAKE_ARGS olddefconfig
 
           echo "==> 最终关键配置"
           grep -E "^CONFIG_(KSU|KPROBES|EXT4_FS|LTO)" .config || true
@@ -353,7 +404,7 @@ jobs:
         run: |
           echo "==> 开始编译（预计 40-150 分钟）"
           nproc
-          make ARCH=arm64 LLVM=1 -j"$(nproc)" Image
+          make ARCH=arm64 $LLVM_MAKE_ARGS -j"$(nproc)" Image
           echo "==> 编译完成"
           ls -la arch/arm64/boot/Image
           du -h arch/arm64/boot/Image
@@ -362,7 +413,7 @@ jobs:
         working-directory: gki
         run: |
           strings arch/arm64/boot/Image | grep -m3 -iE "kernelsu|KSU" || echo "note: 未在 Image 中直接匹配到 ksu 字符串（可能被压缩），继续"
-          echo "kernel release: $(make ARCH=arm64 LLVM=1 -s kernelrelease)"
+          echo "kernel release: $(make ARCH=arm64 $LLVM_MAKE_ARGS -s kernelrelease)"
 
       - name: 准备 AK3 打包目录
         run: |
