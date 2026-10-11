@@ -1,0 +1,111 @@
+{
+  "_comment": "受支持的 KSU 系列 root 方案。全部为正式主流项目（非来源不明的小项目）。新增方案只改这里 + build.yml 的 root_solution.options。",
+  "_verified": "2026-10-11 逐项核对 Kconfig/Kbuild 实测",
+  "_shared_base": "四家的 kernel/Kconfig 里 config KSU 定义完全一致：tristate + depends on KPROBES && EXT4_FS + default y；kernel/ 目录结构相同（Kbuild/Kconfig/setup.sh + core/feature/hook/infra/manager/policy/runtime/selinux/sulog/supercall）。",
+  "solutions": [
+    {
+      "id": "moesu",
+      "name": "MoeSU",
+      "alias": "FolkSU",
+      "repo": "https://github.com/LyraVoid/MoeSU.git",
+      "default_ref": "master",
+      "stars": 35,
+      "note": "本项目默认。KernelSU fork，原名 FolkSU，2026-10 改名。开发者计划下一版把 Manager 改名为 moesu。",
+      "version_formula": "30000 + git_commit_count",
+      "needs_git_history": true,
+      "supports_github_commits_env": false,
+      "artifacts": "release",
+      "release_asset_hint": "kernelsu.ko / manager apk",
+      "manager": {
+        "fetch": true,
+        "repo": "LyraVoid/MoeSU",
+        "workflow": "build-manager.yml",
+        "artifact_name": "manager",
+        "package_whitelist": [
+          "me.yuki.folksu",
+          "me.yuki.folksu.pr",
+          "me.yuki.moesu",
+          "me.yuki.moesu.pr",
+          "me.yuki.moe",
+          "me.yuki.moe.pr"
+        ]
+      },
+      "susfs_branch_style": "gki-<av>-<kv>",
+      "susfs_compatible": true
+    },
+    {
+      "id": "kernelsu",
+      "name": "KernelSU",
+      "alias": "",
+      "repo": "https://github.com/tiann/KernelSU.git",
+      "default_ref": "main",
+      "stars": 19058,
+      "note": "官方原版，最上游、最保守。",
+      "version_formula": "30000 + git_commit_count",
+      "needs_git_history": true,
+      "supports_github_commits_env": false,
+      "artifacts": "github_release",
+      "release_asset_hint": "manager apk 在 Release 里",
+      "manager": {
+        "fetch": false,
+        "repo": "tiann/KernelSU",
+        "workflow": "",
+        "artifact_name": "",
+        "package_whitelist": ["me.weishu.kernelsu", "me.weishu.kernelsu.pr"],
+        "release_asset_pattern": "*.apk"
+      },
+      "susfs_branch_style": "gki-<av>-<kv>",
+      "susfs_compatible": true
+    },
+    {
+      "id": "sukisu",
+      "name": "SukiSU-Ultra",
+      "alias": "SukiSU",
+      "repo": "https://github.com/SukiSU-Ultra/SukiSU-Ultra.git",
+      "default_ref": "main",
+      "stars": 6500,
+      "note": "功能增强分支。版本算法与官方不同：40000 + LOCAL_COUNT - 2815。支持 GITHUB_COMMITS 环境变量覆盖，可不依赖 git 历史。",
+      "version_formula": "40000 + LOCAL_COUNT - 2815",
+      "needs_git_history": false,
+      "supports_github_commits_env": true,
+      "github_commits_offset": 2815,
+      "github_commits_base": 40000,
+      "artifacts": "github_release",
+      "release_asset_hint": "manager apk",
+      "manager": {
+        "fetch": false,
+        "repo": "SukiSU-Ultra/SukiSU-Ultra",
+        "workflow": "",
+        "artifact_name": "",
+        "package_whitelist": ["com.sukisu.ultra", "com.sukisu.ultra.pr"],
+        "release_asset_pattern": "*.apk"
+      },
+      "susfs_branch_style": "gki-<av>-<kv>",
+      "susfs_compatible": true
+    },
+    {
+      "id": "kernelsu-next",
+      "name": "KernelSU-Next",
+      "alias": "KSU-Next",
+      "repo": "https://github.com/KernelSU-Next/KernelSU-Next.git",
+      "default_ref": "dev",
+      "stars": 4411,
+      "note": "重写版，默认分支是 dev 不是 main。",
+      "version_formula": "30000 + git_commit_count",
+      "needs_git_history": true,
+      "supports_github_commits_env": false,
+      "artifacts": "github_release",
+      "release_asset_hint": "manager apk",
+      "manager": {
+        "fetch": false,
+        "repo": "KernelSU-Next/KernelSU-Next",
+        "workflow": "",
+        "artifact_name": "",
+        "package_whitelist": ["com.rifsxd.ksunext", "me.weishu.kernelsu"],
+        "release_asset_pattern": "*.apk"
+      },
+      "susfs_branch_style": "gki-<av>-<kv>",
+      "susfs_compatible": true
+    }
+  ]
+}

@@ -1,13 +1,28 @@
-# MoeSU (FolkSU) GKI Kernel Build
+# GKI Kernel Build — KSU 系列自动构建
 
-自动化构建 **MoeSU**（原 **FolkSU**，KernelSU fork）的 GKI 内核 + AnyKernel3 刷机包 + 配套 root 管理器。
+自动化构建 **KSU 系列 root 方案** 的 GKI 内核 + AnyKernel3 刷机包 + 配套 root 管理器。
 
-> **改名说明**：项目原地址 `LyraVoid/FolkSU` 已于 2026-10 改名为 **`LyraVoid/MoeSU`**（同一仓库，旧地址仍会 301 重定向）。
-> 本仓库沿用 `FolkSU` 作为产物前缀，便于和社区既有命名保持一致。
+支持 4 个**正式主流**项目（全部有公开仓库、持续维护、社区规模大，非来源不明的小项目）：
+
+| id | 项目 | 仓库 | ★ | 默认分支 | Manager 包名 |
+|---|---|---|---|---|---|
+| `moesu` | **MoeSU**（原 FolkSU） | `LyraVoid/MoeSU` | 35 | `master` | `me.yuki.folksu` |
+| `kernelsu` | **KernelSU** | `tiann/KernelSU` | 19k+ | `main` | `me.weishu.kernelsu` |
+| `sukisu` | **SukiSU-Ultra** | `SukiSU-Ultra/SukiSU-Ultra` | 6.5k+ | `main` | `com.sukisu.ultra` |
+| `kernelsu-next` | **KernelSU-Next** | `KernelSU-Next/KernelSU-Next` | 4.4k+ | `dev` | `com.rifsxd.ksunext` |
+
+> 为什么能共用一套流程？实测四家的 `kernel/Kconfig` 里 `config KSU` 定义**逐字节相同**
+> （`tristate` + `depends on KPROBES && EXT4_FS` + `default y`），`kernel/` 目录结构也一致
+> （`Kbuild` / `Kconfig` / `setup.sh` + `core/ feature/ hook/ infra/ manager/ policy/ runtime/ selinux/ sulog/ supercall/`）。
+> 差异（仓库地址、默认分支、版本算法、Manager 获取方式、包名白名单）全部抽到
+> [`config/root-solutions.json`](config/root-solutions.json)，workflow 只是消费它。
+
+> **改名说明（MoeSU）**：项目原地址 `LyraVoid/FolkSU` 已于 2026-10 改名为 **`LyraVoid/MoeSU`**
+> （同一仓库，旧地址仍会 301 重定向）。上游计划下一个版本把 Manager 展示名改为 **`moesu`**。
 
 ## 这是什么
 
-把 MoeSU 的内核以 **built-in 模式**（`CONFIG_KSU=y`）集成进 Google GKI 内核源码，
+把所选 root 方案的内核以 **built-in 模式**（`CONFIG_KSU=y`）集成进 Google GKI 内核源码，
 编译出完整 `Image`，再用 [AnyKernel3](https://github.com/WildKernels/AnyKernel3) 的 **gki-2.0**
 分支打成刷机 zip；同时自动抓取官方最新的 **Manager APK** 一并发布。
 
@@ -31,21 +46,23 @@
 
 ## 怎么用
 
-1. 进 **Actions** → **Build FolkSU GKI Kernel + AnyKernel3** → **Run workflow**
-2. 选 **KMI**（例如 `android15-6.6`）
-3. 按需开 **SUSFS**
-4. 跑完在 **Releases** 下载：
-   - `FolkSU-<KMI>-GKI-AnyKernel3.zip` — 内核刷机包
-   - `FolkSU-Manager-<版本>.apk` — 配套管理器
-5. 先刷内核 zip，再装 Manager APK
+1. 进 **Actions** → **Build GKI Kernel + AnyKernel3** → **Run workflow**
+2. 选 **root 方案**（`moesu` / `kernelsu` / `sukisu` / `kernelsu-next`）
+3. 选 **KMI**（例如 `android15-6.6`）
+4. 按需开 **SUSFS**
+5. 跑完在 **Releases** 下载：
+   - `<方案名>-<KMI>-GKI-AnyKernel3.zip` — 内核刷机包
+   - `<方案名>-Manager-<版本>.apk` — 配套管理器
+6. 先刷内核 zip，再装 Manager APK
 
 ### 输入项
 
 | 输入 | 说明 |
 |---|---|
+| `root_solution` | root 方案，必填（4 选 1） |
 | `kmi` | 目标 KMI，必填 |
 | `kernel_branch` | AOSP 分支，留空 = `<kmi>-lts`；也可填 `android15-6.6-2026-10` |
-| `folksu_ref` | MoeSU 内核源码引用，默认 `master` |
+| `solution_ref` | root 源码引用，留空 = 配置里的默认分支（MoeSU `master` / KernelSU `main` / SukiSU `main` / KSU-Next `dev`） |
 | `enable_susfs` | 集成 SUSFS 内核补丁 |
 | `skip_on_patch_failure` | 补丁失败时跳过（不中断构建） |
 | `make_release` | 成功后创建 Release |
@@ -56,8 +73,8 @@
 ```
 AOSP kernel/common @ <kmi>-lts
         │
-        ├─ MoeSU 仓库（完整克隆，保留 .git）
-        │     └─ kernel/  → common/drivers/folksu-src/kernel
+        ├─ <root 方案仓库>（默认完整克隆，保留 .git）
+        │     └─ kernel/  → common/drivers/ksu-src/kernel
         │                     （软链为 common/drivers/kernelsu）
         │
         ├─ susfs4ksu @ gki-<av>-<kv> (可选)
@@ -67,13 +84,14 @@ AOSP kernel/common @ <kmi>-lts
         ├─ make Image
         │
         ├─ WildKernels/AnyKernel3@gki-2.0  → 生成 anykernel.sh → zip
+        │     └─ ZIP 合规自检（见下）
         │
-        └─ MoeSU Build Manager workflow → 抓最新 Manager APK
+        └─ 抓最新 Manager APK（Actions artifact 或 GitHub Release）
 ```
 
-## 三个关键实现细节
+## 四个关键实现细节
 
-### 1. 必须完整克隆 MoeSU（不能 `--depth=1`）
+### 1. 多数方案必须完整克隆（不能 `--depth=1`）
 
 `kernel/Kbuild` 里的版本号推导是：
 
@@ -82,8 +100,20 @@ KSU_VERSION = 30000 + $(git rev-list --count HEAD)
 ```
 
 浅克隆会让 commit 计数退化成 `1` → `KSU_VERSION=30001`，与真实值不符，
-管理器会提示"**需要更新内核**"。实测当前 master 为 **2792** 个提交 → `KSU_VERSION=32792`，
+管理器会提示"**需要更新内核**"。实测 MoeSU 当前 master 为 **2792** 个提交 → `KSU_VERSION=32792`，
 与官方 Manager APK 文件名里的 `_32792` 完全吻合。
+
+**例外：SukiSU-Ultra** 的算法不同：
+
+```make
+VERSION_BASE   := 40000
+VERSION_OFFSET := 2815
+LOCAL_COUNT    := $(if $(GITHUB_COMMITS),$(GITHUB_COMMITS),$(git_commit_count))
+KSU_VERSION    := $(VERSION_BASE) + $(LOCAL_COUNT) - $(VERSION_OFFSET)
+```
+
+它支持 `GITHUB_COMMITS` 环境变量覆盖，**不依赖 git 历史**，所以配置里
+`needs_git_history: false` → workflow 对它走浅克隆（省时间）。是否浅克隆由配置驱动。
 
 ### 2. 必须把 `.git` 一起放进内核树
 
@@ -97,14 +127,14 @@ ifneq ($(GIT_ROOT),$(KERNEL_GIT_ROOT))   # 只有不同才会设版本号
 
 如果只 `cp -a kernel/`（丢掉 `.git`），`GIT_ROOT` 会向上命中 `gki/.git`，
 与 `KERNEL_GIT_ROOT` 相同 → **跳过推导 → `KSU_VERSION=16`**。
-所以 workflow 把**整个 MoeSU 仓库**（含 `.git`）复制进 `drivers/folksu-src/`，
-再软链 `kernelsu -> folksu-src/kernel`。
+所以 workflow 把**整个源码仓库**（含 `.git`）复制进 `drivers/ksu-src/`，
+再软链 `kernelsu -> ksu-src/kernel`。
 
 > 这也是不直接跑官方 `kernel/setup.sh` 的原因：它会 `git clone tiann/KernelSU`
-> 并执行 `git stash/checkout/pull`，对已克隆的本地源码不可靠，而且 MoeSU 的
+> 并执行 `git stash/checkout/pull`，对已克隆的本地源码不可靠，而且上游的
 > `kernel/` 本身就是自包含的完整内核侧源码树，不需要再去拉上游。
 
-### 3. 内核靠签名认管理器，不靠包名 —— 所以必须**不**定义 `KSU_MANAGER_PACKAGE`
+### 3. 内核靠签名认管理器 —— 所以必须**不**定义 `KSU_MANAGER_PACKAGE`
 
 `kernel/manager/apk_sign.c` 的判断逻辑：
 
@@ -128,7 +158,9 @@ bool is_manager_apk(char *path)
 | **未定义**（本流程的选择） | 只校验签名 → 管理器改包名后**依然可用** |
 | 已定义 | 包名必须完全相等 → 上游改包名后**旧内核不认新管理器** |
 
-**已知的上游变更**：下一个版本 Manager **改名为 `moesu`**，
+这也是**一个内核能跨 4 个方案识别管理器**的原因：不固化包名，只按签名信任。
+
+**已知的上游变更（MoeSU）**：下一个版本 Manager **改名为 `moesu`**，
 包名从 `me.yuki.folksu` 改为 `me.yuki.moesu`，**签名证书不变**。
 因为本流程不固化包名，改名的**新** Manager 刷到本流程编译的**旧**内核上
 依然会被识别为可信管理器。
@@ -139,34 +171,42 @@ bool is_manager_apk(char *path)
 | 下一版 | **moesu** | `me.yuki.moesu` | **不变** |
 
 > 包名相关的引用全在用户态，与内核构建无关：
-> `manager/app/build.gradle.kts`（`defaultManagerPackageName` 第 28 行 /
-> `defaultManagerName` 第 29 行 / `resValue app_name` 第 154 行）、
-> `manager/app/src/main/res/values/strings.xml`（`home_tile_manager`）、
-> `userspace/ksud/build.rs`（`KSU_PACKAGE_NAME` 环境变量，可覆盖）、
-> `.github/workflows/ksud.yml`、`scripts/test_anykernel3_device.py`。
+> `manager/app/build.gradle.kts`（`defaultManagerPackageName` / `defaultManagerName` /
+> `resValue app_name`）、`manager/app/src/main/res/values/strings.xml`（`home_tile_manager`）、
+> `userspace/ksud/build.rs`（`KSU_PACKAGE_NAME` 环境变量，可覆盖）等。
 > 经检索，`kernel/` 目录内**不含**任何包名或展示名硬编码。
 
 可信签名来源：`Kbuild` 里的 `FOLKSU_TRUSTED_HASH ← EXPECTED_HASH`，
-由官方用仓库 keystore 签出的 release 证书算出（实测 `0x033b` /
-`c371061b19d8c7d7d6133c6a9bafe198fa944e50c1b31c9d8daa8d7f1fc2d2d6`）。
-`apk_sign_keys[]` 里其余（KernelSU / KowSU / KernelSU-Next / ReSukiSU /
-SukiSU / MKSU / RKSU / xxKSU）都只是"**识别但不自动授权**"，需要用户在
-动态管理器界面手动批准。
+由官方用仓库 keystore 签出的 release 证书算出。`apk_sign_keys[]` 里其余
+（KernelSU / KowSU / KernelSU-Next / ReSukiSU / SukiSU / MKSU / RKSU / xxKSU）
+都只是"**识别但不自动授权**"，需要用户在动态管理器界面手动批准。
 
 > workflow 里会打印 Manager 的包名与签名指纹并做记录，便于跨版本比对。
+
+### 4. AnyKernel3 ZIP 要做合规自检
+
+上游 ksud 已加固 AnyKernel3 ZIP 校验（见 `userspace/ksud/ANYKERNEL3.md`）：
+
+- 必须**恰好一个** `META-INF/com/google/android/update-binary`
+- 顶层必须有 `anykernel.sh`
+- 拒绝模块 ZIP、重复条目、绝对路径与 `../` 穿越
+- 安装脚本（`update-binary`）体积上限 **4 MiB**
+
+所以打包后 workflow 会做一次自检（`unzip -Z1` 列条目 → 逐项断言），
+避免生成"刷不进去"的包。
 
 ## 编译时长
 
 **单个 KMI 约 40–150 分钟**（取决于 runner 与是否开 SUSFS）。
-本流程设计为**一次一个 KMI**，避免大批量 CI 触发 GitHub 风控。
+本流程设计为**一次一个方案 / 一个 KMI**，避免大批量 CI 触发 GitHub 风控。
 
 ## 上游来源
 
 | 组件 | 来源 |
 |---|---|
 | 内核基座 | `android.googlesource.com/kernel/common` |
-| Root 内核 | `LyraVoid/MoeSU`（原名 FolkSU，GPL-3.0） |
-| Manager APK | `LyraVoid/MoeSU` Actions → `build-manager.yml` |
+| Root 内核 | `LyraVoid/MoeSU`、`tiann/KernelSU`、`SukiSU-Ultra/SukiSU-Ultra`、`KernelSU-Next/KernelSU-Next` |
+| Manager APK | 各项目自己的 Actions / Release |
 | SUSFS | `ShirkNeko/susfs4ksu` |
 | AK3 框架 | `WildKernels/AnyKernel3@gki-2.0` |
 | 参考实现 | `LingLuo17/AnyKernel3@dev`、`ShirkNeko/GKI_KernelSU_SUSFS` |
@@ -176,19 +216,29 @@ SukiSU / MKSU / RKSU / xxKSU）都只是"**识别但不自动授权**"，需要�
 - 刷内核**可能变砖**。刷前务必备份原厂 `boot.img` / `init_boot.img`。
 - 内置模式与 LKM 模式**不可共存**；从 LKM 转内置前请先还原原厂镜像。
 - AK3 脚本以 root 运行，请只刷可信包。
-- Manager 版本与内核版本不一致时会提示"需要更新内核"，这时把 `folksu_ref`
+- Manager 版本与内核版本不一致时会提示"需要更新内核"，这时把 `solution_ref`
   固定到该 Manager 对应的 commit 即可对齐。
+- 4 个方案产出的内核**只能配各自的管理器**（或签名互通的管理器）；
+  不要把一个方案的内核配上另一个方案的管理器。
 
 ## 仓库结构
 
 ```
 .
-├── .github/workflows/build.yml   # 主构建流程（19 步）
-├── config/kmi-matrix.json        # KMI 分支对照表
-├── scripts/fetch-manager.sh      # 自动抓取最新 Manager APK
+├── .github/workflows/build.yml    # 主构建流程
+├── config/root-solutions.json     # root 方案注册表（唯一需要改的地方）
+├── config/kmi-matrix.json         # KMI 分支对照表
+├── scripts/resolve-solution.sh    # 解析 root 方案配置 → workflow 输出
+├── scripts/fetch-manager.sh       # 自动抓取最新 Manager APK
 └── README.md
 ```
 
+### 新增一个 root 方案
+
+只需在 `config/root-solutions.json` 的 `solutions[]` 里加一项，并在
+`build.yml` 的 `root_solution.options` 里加一个同名 id。
+其余（克隆、集成、版本算法、Manager 获取、包名白名单、产物命名）全部自动生效。
+
 ## License
 
-构建脚本：MIT。集成产物受各上游许可约束（MoeSU GPL-3.0、AK3 见其 LICENSE）。
+构建脚本：MIT。集成产物受各上游许可约束（MoeSU / KernelSU 等均为 GPL-3.0，AK3 见其 LICENSE）。
