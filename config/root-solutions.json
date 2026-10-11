@@ -1,6 +1,6 @@
 {
   "_comment": "受支持的 KSU 系列 root 方案。全部为正式主流项目（非来源不明的小项目）。新增方案只改这里 + build.yml 的 root_solution.options。",
-  "_verified": "2026-10-11 逐项核对 Kconfig/Kbuild 实测",
+  "_verified": "2026-10-11 逐项核对四家 kernel/Kconfig 的 config 项实测",
   "_shared_base": "四家的 kernel/Kconfig 里 config KSU 定义完全一致：tristate + depends on KPROBES && EXT4_FS + default y；kernel/ 目录结构相同（Kbuild/Kconfig/setup.sh + core/feature/hook/infra/manager/policy/runtime/selinux/sulog/supercall）。",
   "solutions": [
     {
@@ -34,7 +34,21 @@
         ]
       },
       "susfs_branch_style": "gki-<av>-<kv>",
-      "susfs_compatible": true
+      "susfs_compatible": true,
+      "kernel_features": {
+        "always_enable": [
+          "KSU_DYNAMIC_MANAGER"
+        ],
+        "optional": {},
+        "all_ksu_options_measured": [
+          "KSU",
+          "KSU_DEBUG",
+          "KSU_DISABLE_MANAGER",
+          "KSU_DYNAMIC_MANAGER",
+          "KSU_DISABLE_POLICY",
+          "KSU_X86_PATCH_SYSCALL_DISPATCHER"
+        ]
+      }
     },
     {
       "id": "kernelsu",
@@ -54,11 +68,25 @@
         "repo": "tiann/KernelSU",
         "workflow": "",
         "artifact_name": "",
-        "package_whitelist": ["me.weishu.kernelsu", "me.weishu.kernelsu.pr"],
+        "package_whitelist": [
+          "me.weishu.kernelsu",
+          "me.weishu.kernelsu.pr"
+        ],
         "release_asset_pattern": "*.apk"
       },
       "susfs_branch_style": "gki-<av>-<kv>",
-      "susfs_compatible": true
+      "susfs_compatible": true,
+      "kernel_features": {
+        "always_enable": [],
+        "optional": {},
+        "all_ksu_options_measured": [
+          "KSU",
+          "KSU_DEBUG",
+          "KSU_DISABLE_MANAGER",
+          "KSU_DISABLE_POLICY",
+          "KSU_X86_PATCH_SYSCALL_DISPATCHER"
+        ]
+      }
     },
     {
       "id": "sukisu",
@@ -80,11 +108,36 @@
         "repo": "SukiSU-Ultra/SukiSU-Ultra",
         "workflow": "",
         "artifact_name": "",
-        "package_whitelist": ["com.sukisu.ultra", "com.sukisu.ultra.pr"],
+        "package_whitelist": [
+          "com.sukisu.ultra",
+          "com.sukisu.ultra.pr"
+        ],
         "release_asset_pattern": "*.apk"
       },
       "susfs_branch_style": "gki-<av>-<kv>",
-      "susfs_compatible": true
+      "susfs_compatible": true,
+      "kernel_features": {
+        "always_enable": [
+          "KSU_MANUAL_SU"
+        ],
+        "optional": {
+          "KPM": {
+            "default": false,
+            "input": "feature_kpm",
+            "risk": "high",
+            "desc": "SukiSU 的 Kernel Patch Module：运行时加载内核补丁模块扩展内核功能。上游 help 明确写着 may affect system stability，且会 select KALLSYMS/KALLSYMS_ALL。"
+          }
+        },
+        "all_ksu_options_measured": [
+          "KSU",
+          "KSU_DEBUG",
+          "KSU_MANUAL_SU",
+          "KPM",
+          "KSU_DISABLE_MANAGER",
+          "KSU_DISABLE_POLICY",
+          "KSU_X86_PATCH_SYSCALL_DISPATCHER"
+        ]
+      }
     },
     {
       "id": "kernelsu-next",
@@ -104,11 +157,26 @@
         "repo": "KernelSU-Next/KernelSU-Next",
         "workflow": "",
         "artifact_name": "",
-        "package_whitelist": ["com.rifsxd.ksunext", "me.weishu.kernelsu"],
+        "package_whitelist": [
+          "com.rifsxd.ksunext",
+          "me.weishu.kernelsu"
+        ],
         "release_asset_pattern": "*.apk"
       },
       "susfs_branch_style": "gki-<av>-<kv>",
-      "susfs_compatible": true
+      "susfs_compatible": true,
+      "kernel_features": {
+        "always_enable": [],
+        "optional": {},
+        "all_ksu_options_measured": [
+          "KSU",
+          "KSU_DEBUG",
+          "KSU_DISABLE_MANAGER",
+          "KSU_DISABLE_POLICY",
+          "KSU_X86_PATCH_SYSCALL_DISPATCHER"
+        ]
+      }
     }
-  ]
+  ],
+  "_kernel_features_note": "kernel_features 描述「该方案独有的内核功能开关」（实测四家 Kconfig 差异）：KSU_DYNAMIC_MANAGER 仅 FinaSU 有；KSU_MANUAL_SU 与 KPM 仅 SukiSU-Ultra 有。always_enable 里的项「该方案存在就开」（不存在自动跳过，因为各 KMI/分支的 Kconfig 可能不同）。optional 里的项由 workflow 输入 feature_kpm 控制，默认按 default 取值；KPM 上游 help 明确警告 may affect system stability，故默认关。"
 }

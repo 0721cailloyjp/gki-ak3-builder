@@ -98,8 +98,45 @@ Android 版本与内核版本**不是一一对应**的，所以 A17 有两个 ta
 | `enable_susfs` | 集成 SUSFS 内核补丁（**仅 `builtin` 模式生效**） |
 | `skip_on_patch_failure` | 补丁失败时跳过（不中断构建） |
 | `kernel_tweaks` | 内核调优档位，见下节；默认 `safe`（**仅 `builtin` 模式生效**） |
+| `feature_kpm` | **仅 SukiSU-Ultra**：启用 KPM 内核补丁模块。上游警告可能影响系统稳定性，默认 `false` |
 | `make_release` | 成功后创建 Release |
 | `release_tag` | 自定义 tag，留空自动生成 |
+
+## 方案独有的内核功能
+
+四家的 `kernel/Kconfig` 定义**并不相同** —— 有些功能只有特定方案才有。2026-10-11 逐项实测：
+
+| 内核选项 | FinaSU | KernelSU | SukiSU-Ultra | KSU-Next | 我们的处理 |
+|---|:-:|:-:|:-:|:-:|---|
+| `KSU` | ✅ | ✅ | ✅ | ✅ | 总是开 |
+| `KSU_DYNAMIC_MANAGER` | ✅ | — | — | — | FinaSU 下自动开 |
+| `KSU_MANUAL_SU` | — | — | ✅ | — | SukiSU 下自动开（上游 `default y`） |
+| `KPM` | — | — | ✅ | — | SukiSU 下由 `feature_kpm` 控制（默认关） |
+| `KSU_DEBUG` | ✅ | ✅ | ✅ | ✅ | 不开（调试用） |
+| `KSU_DISABLE_MANAGER` | ✅ | ✅ | ✅ | ✅ | 不开（会废掉管理器） |
+| `KSU_DISABLE_POLICY` | ✅ | ✅ | ✅ | ✅ | 不开（会废掉逐应用授权） |
+| `KSU_X86_PATCH_SYSCALL_DISPATCHER` | ✅ | ✅ | ✅ | ✅ | 仅 `X86_64` 依赖，arm64 无关 |
+
+差异全部声明在 [`config/root-solutions.json`](config/root-solutions.json) 的 `kernel_features`
+字段里，workflow 不含任何方案名硬编码：
+
+```json
+"kernel_features": {
+  "always_enable": ["KSU_MANUAL_SU"],
+  "optional": {
+    "KPM": { "default": false, "input": "feature_kpm", "risk": "high" }
+  }
+}
+```
+
+**`KPM` 是什么**：SukiSU 的 **Kernel Patch Module** —— 允许在运行时加载 `.kpm` 文件来
+扩展/修改内核行为，不必重编内核。这是 SukiSU 的招牌能力，上游 help 同时也写明
+*"may affect system stability"*，因此本流程默认关闭，需要时手动勾选 `feature_kpm`。
+
+> ⚠️ 开关是否真的生效**不能只看 `scripts/config` 的返回码**。现代 `scripts/config` 的
+> `set_var()` 在符号不存在时会直接 `echo "CONFIG_X=y" >> .config`，返回码仍是 0。
+> 所以本流程统一先用 `--state` 判断符号是否存在（返回 `undef` 即不存在），
+> 再决定是否启用；最后还回读 `.config` 做断言。
 
 ## 构建模式：`builtin` vs `lkm`
 
@@ -386,6 +423,7 @@ endif
 ├── config/kmi-matrix.json         # KMI 分支对照表（branch 字段是唯一真源）
 ├── config/kernel-tweaks.json      # 内核调优清单（网络/功耗/存储/内存/编译精简）
 ├── scripts/resolve-solution.sh    # 解析 root 方案配置 → workflow 输出
+├── scripts/resolve-features.sh    # 解析方案独有内核功能的开关决策表
 ├── scripts/fetch-manager.sh       # 自动抓取最新 Manager APK
 ├── scripts/apply-tweaks.sh        # 按档位把调优项写进 .config
 ├── scripts/build-lkm.sh           # LKM 模式：树外编译 kernelsu.ko（arm64 + x86_64）

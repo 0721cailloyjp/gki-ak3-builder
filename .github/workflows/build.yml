@@ -12,6 +12,11 @@ on:
         options:
           - builtin
           - lkm
+      feature_kpm:
+        description: "【仅 SukiSU-Ultra】启用 KPM 内核补丁模块（运行时加载 .kpm 扩展内核功能；上游警告可能影响系统稳定性）"
+        required: true
+        type: boolean
+        default: false
       root_solution:
         description: "root 方案（KSU 系列，均为正式主流项目）"
         required: true
@@ -121,6 +126,8 @@ jobs:
           SOL_FORMULA="${{ steps.sol.outputs.sol_version_formula }}"
           MGR_REPO="${{ steps.sol.outputs.mgr_repo }}"
           MGR_PKGS="${{ steps.sol.outputs.mgr_pkgs }}"
+          SOL_ALWAYS="${{ steps.sol.outputs.sol_always_enable }}"
+          SOL_OPT="${{ steps.sol.outputs.sol_optional_features }}"
 
           printf '%-16s = %s\n' \
             sol_name "$SOL_NAME" \
@@ -129,17 +136,24 @@ jobs:
             sol_needs_git "$SOL_GIT" \
             sol_version_formula "$SOL_FORMULA" \
             mgr_repo "$MGR_REPO" \
-            mgr_pkgs "$MGR_PKGS"
+            mgr_pkgs "$MGR_PKGS" \
+            sol_always_enable "$SOL_ALWAYS" \
+            sol_optional_features "$SOL_OPT"
 
           [ -n "$SOL_NAME" ] || { echo "::error::sol_name 为空：resolve-solution.sh 未写入 GITHUB_OUTPUT"; exit 1; }
           [ -n "$SOL_REPO" ] || { echo "::error::sol_repo 为空：resolve-solution.sh 未写入 GITHUB_OUTPUT"; exit 1; }
           [ -n "$SOL_REF" ]  || { echo "::error::sol_ref 为空：resolve-solution.sh 未写入 GITHUB_OUTPUT"; exit 1; }
           case "$SOL_GIT" in true|false) ;; *) echo "::error::sol_needs_git 非法: '$SOL_GIT'"; exit 1 ;; esac
+          # 可选功能必须是合法 JSON（空方案输出 {}）
+          [ -n "$SOL_OPT" ] || { echo "::error::sol_optional_features 为空"; exit 1; }
+          python3 -c "import json,sys; json.loads(sys.argv[1])" "$SOL_OPT" \
+            || { echo "::error::sol_optional_features 不是合法 JSON: $SOL_OPT"; exit 1; }
           echo "OK: 方案输出已就绪（$SOL_NAME）"
 
       - name: 输出构建参数
         run: |
           echo "构建模式      : ${{ inputs.build_mode }}"
+          echo "KPM           : ${{ inputs.feature_kpm }}（仅 SukiSU-Ultra 有效）"
           echo "root 方案     : ${{ inputs.root_solution }}"
           echo "KMI           : ${{ inputs.kmi }}"
           echo "kernel branch : ${{ inputs.kernel_branch || '(auto -> lts)' }}"
@@ -440,6 +454,85 @@ jobs:
           scripts/config --file .config -e KPROBES_EVENTS || true
           scripts/config --file .config -e EXT4_FS
 
+          # --- 方案独有的内核功能开关 ---
+          # 实测四家 kernel/Kconfig 的差异（2026-10-11）：
+          #   KSU_DYNAMIC_MANAGER  仅 FinaSU 有
+          #   KSU_MANUAL_SU / KPM  仅 SukiSU-Ultra 有
+          # 差异全部来自 config/root-solutions.json 的 kernel_features，
+          # 这里不硬编码任何方案名。
+          #
+          # ⚠️ 重要：现代 scripts/config 的 set_var() 在符号【不存在】时会
+          #    直接 `echo "CONFIG_X=y" >> .config`，返回码仍是 0。
+          #    所以【不能】靠 `-e` 的返回码判断符号是否存在 ——
+          #    那会把不存在的符号（含打错的符号名）静默写进 .config。
+          #    正确做法：先用 `--state` 查询，输出 "undef" 表示不存在。
+          cfg_has() {
+            # 返回 0 = 符号存在；1 = 不存在
+            local sym="$1"
+            local st
+            st="$(scripts/config --file .config --state "$sym" 2>/dev/null || echo undef)"
+            [ "$st" != "undef" ]
+          }
+
+          cfg_enable() {
+            local sym="$1" what="${2:-}"
+            if cfg_has "$sym"; then
+              scripts/config --file .config -e "$sym"
+              echo "    已启用 $sym${what:+（$what）}"
+            else
+              # 该方案/该 KMI 未定义此符号 —— 正常情况，跳过
+              echo "    跳过 $sym（未定义此符号）${what:+ [$what]}"
+            fi
+          }
+
+          cfg_disable() {
+            local sym="$1"
+            if cfg_has "$sym"; then
+              scripts/config --file .config -d "$sym"
+              echo "    $sym = 关闭"
+            else
+              echo "    跳过 $sym（未定义此符号）"
+            fi
+          }
+
+          SOL_ID="${{ steps.sol.outputs.sol_id }}"
+          SOL_ALWAYS="${{ steps.sol.outputs.sol_always_enable }}"
+          SOL_OPT_JSON='${{ steps.sol.outputs.sol_optional_features }}'
+
+          echo "==> 方案 $SOL_ID 的内核功能开关"
+          echo "    always_enable : ${SOL_ALWAYS:-<无>}"
+
+          if [ -n "$SOL_ALWAYS" ]; then
+            # 注意：不能 `... | while`，子 shell 里的变量不会影响父 shell；
+            # 这里只做打印，无需回传变量，所以管道是安全的。
+            printf '%s\n' "$SOL_ALWAYS" | tr ',' '\n' | while read -r sym; do
+              [ -n "$sym" ] || continue
+              cfg_enable "$sym" "方案固定启用"
+            done
+          fi
+
+          # 可选功能：由 scripts/resolve-features.sh 产出决策表（TSV）。
+          # 这里刻意不内联 python —— 多行 python 顶格写会破坏 `run: |` 的
+          # YAML 块缩进（ScannerError: could not find expected ':'）。
+          if [ -n "$SOL_OPT_JSON" ] && [ "$SOL_OPT_JSON" != "{}" ]; then
+            echo "    可选功能（按输入决定）:"
+            OPT_SH="$GITHUB_WORKSPACE/scripts/resolve-features.sh"
+            OPT_LINES="$(SOL_OPT_JSON="$SOL_OPT_JSON" \
+                         FEAT_KPM='${{ inputs.feature_kpm }}' \
+                         bash "$OPT_SH" 2>/dev/null || true)"
+
+            if [ -n "$OPT_LINES" ]; then
+              printf '%s\n' "$OPT_LINES" | while IFS='|' read -r sym want risk source; do
+                [ -n "$sym" ] || continue
+                if [ "$want" = "true" ]; then
+                  cfg_enable "$sym" "可选功能，风险 $risk，来源：$source"
+                else
+                  cfg_disable "$sym"
+                fi
+              done
+            fi
+          fi
+
           # --- 故意不定义 KSU_MANAGER_PACKAGE ---
           # kernel/manager/apk_sign.c 的 is_manager_apk() 逻辑是：
           #   #ifdef KSU_MANAGER_PACKAGE  →  先比对包名，不等就直接 false
@@ -456,14 +549,16 @@ jobs:
             && echo "::warning::检测到 KSU_MANAGER_PACKAGE，改名后可能失效" \
             || echo "OK: 未固化包名"
 
-          # --- SUSFS（若补丁已应用，这些符号才存在）---
+          # --- SUSFS（仅当补丁已应用，这些符号才存在）---
+          # 未打补丁时符号不存在 → cfg_enable 会正确跳过，不会把虚假条目写进 .config
+          echo "==> SUSFS 配置项"
           for sym in KSU_SUSFS KSU_SUSFS_SUS_PATH KSU_SUSFS_SUS_MOUNT \
                      KSU_SUSFS_SUS_KSTAT KSU_SUSFS_SPOOF_UNAME \
                      KSU_SUSFS_ENABLE_LOG KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS; do
-            scripts/config --file .config -e "$sym" 2>/dev/null || true
+            cfg_enable "$sym"
           done
 
-          # 内核侧符号解析
+          # 内核侧符号解析（KPM 也会 select 这两项，这里显式开作为兜底）
           scripts/config --file .config -e KALLSYMS -e KALLSYMS_ALL || true
 
           # --- 内核调优（网络/存储/CPU功耗/内存/编译精简）---
@@ -491,6 +586,40 @@ jobs:
           echo "--- 断言 CONFIG_KSU 生效 ---"
           grep -qE '^CONFIG_KSU=y' .config || grep -qE '^CONFIG_KSU=m' .config \
             || { echo "::error::CONFIG_KSU 未生效，集成失败"; exit 1; }
+
+          # --- 断言方案独有功能开关真的生效 ---
+          # 与上面的 cfg_has 同样道理：不能只看 scripts/config 的返回码，
+          # 必须回读 .config 的真实内容。
+          echo "--- 方案独有功能生效情况 ---"
+          check_feature() {
+            # $1 = 符号名；该符号在本方案不存在时视为「不适用」，跳过
+            local sym="$1" st
+            st="$(scripts/config --file .config --state "$sym" 2>/dev/null || echo undef)"
+            if [ "$st" = "undef" ]; then
+              echo "    不适用 $sym"
+              return 0
+            fi
+            echo "    $sym = $st"
+            return 0
+          }
+
+          SOL_ALWAYS_CHK="${{ steps.sol.outputs.sol_always_enable }}"
+          if [ -n "$SOL_ALWAYS_CHK" ]; then
+            printf '%s\n' "$SOL_ALWAYS_CHK" | tr ',' '\n' | while read -r sym; do
+              [ -n "$sym" ] || continue
+              check_feature "$sym"
+            done
+          fi
+          # KPM 若被请求开启，必须真的开（否则等于用户白选了）
+          if [ "${{ inputs.feature_kpm }}" = "true" ] && [ "${{ steps.sol.outputs.sol_id }}" = "sukisu" ]; then
+            ST_KPM="$(scripts/config --file .config --state KPM 2>/dev/null || echo undef)"
+            echo "    KPM = $ST_KPM （用户已请求开启）"
+            case "$ST_KPM" in
+              y|m) echo "    OK: KPM 已生效" ;;
+              undef) echo "::warning::本方案/KMI 未定义 KPM，无法开启" ;;
+              *) echo "::error::KPM 请求开启但未生效（state=$ST_KPM）"; exit 1 ;;
+            esac
+          fi
 
       - name: 编译内核
         if: ${{ inputs.build_mode == 'builtin' }}

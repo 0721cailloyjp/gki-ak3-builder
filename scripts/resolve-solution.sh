@@ -12,6 +12,7 @@
 #   sol_id / sol_name / sol_alias / sol_repo / sol_ref
 #   sol_needs_git / sol_uses_github_commits / sol_gh_base / sol_gh_offset
 #   sol_version_formula / sol_susfs_compatible
+#   sol_always_enable / sol_optional_features   （该方案独有的内核功能开关）
 #   mgr_fetch / mgr_repo / mgr_workflow / mgr_artifact / mgr_release_pattern
 #   mgr_pkgs
 # =============================================================================
@@ -43,11 +44,18 @@ if sol is None:
     sys.exit(1)
 
 m = sol.get("manager") or {}
+kf = sol.get("kernel_features") or {}
 
 
 def b(v):
     return "true" if v else "false"
 
+
+# 该方案独有的内核功能开关（实测四家 Kconfig 差异）：
+#   always_enable —— 该方案存在就开（不存在自动跳过）
+#   optional      —— 由 workflow 输入控制，形如 {"KPM": {"default": false, ...}}
+always_enable = kf.get("always_enable", []) or []
+optional = kf.get("optional", {}) or {}
 
 out = {
     "sol_id": sol.get("id", ""),
@@ -62,6 +70,9 @@ out = {
     "sol_version_formula": sol.get("version_formula", ""),
     "sol_susfs_compatible": b(sol.get("susfs_compatible", True)),
     "sol_stars": str(sol.get("stars", "") or ""),
+    "sol_always_enable": ",".join(str(x) for x in always_enable),
+    # JSON 单行（无换行），供 workflow 用 python 解析各可选功能的默认值
+    "sol_optional_features": json.dumps(optional, ensure_ascii=False, separators=(",", ":")),
     "mgr_fetch": b(m.get("fetch", False)),
     "mgr_repo": m.get("repo", "") or "",
     "mgr_workflow": m.get("workflow", "") or "",
