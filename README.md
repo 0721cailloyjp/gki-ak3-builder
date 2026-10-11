@@ -75,30 +75,59 @@ Android 版本与内核版本**不是一一对应**的，所以 A17 有两个 ta
 ## 怎么用
 
 1. 进 **Actions** → **Build GKI Kernel + AnyKernel3** → **Run workflow**
-2. 选 **root 方案**（`finasu` / `kernelsu` / `sukisu` / `kernelsu-next`）
-3. 选 **KMI**（例如 `android15-6.6`）
-4. 按需开 **SUSFS**
-5. 按需选 **内核调优档位**（`none` / `safe` / `smart`，默认 `safe`）
-6. 跑完在 **Releases** 下载：
-   - `<方案名>-<KMI>-GKI-AnyKernel3.zip` — 内核刷机包
-   - `<方案名>-Manager-<版本>.apk` — 配套管理器
-7. 先刷内核 zip，再装 Manager APK
+2. 选 **构建模式**（`builtin` / `lkm`，见下节）
+3. 选 **root 方案**（`finasu` / `kernelsu` / `sukisu` / `kernelsu-next`）
+4. 选 **KMI**（例如 `android15-6.6`）
+5. 按需开 **SUSFS**（仅 `builtin` 生效）
+6. 按需选 **内核调优档位**（`none` / `safe` / `smart`，默认 `safe`）
+7. 跑完在 **Releases** 下载：
+   - `builtin`：`<方案名>-<KMI>-GKI-AnyKernel3.zip` — 内核刷机包
+   - `lkm`：`aarch64/<KMI>_kernelsu.ko` + `x86_64/<KMI>_kernelsu.ko` — 可加载模块
+   - `<方案名>-Manager-<版本>.apk` — 配套管理器（两种模式都有）
+8. `builtin` 先刷内核 zip 再装 Manager；`lkm` 装完 Manager 后由它自己加载 `.ko`
 
 ### 输入项
 
 | 输入 | 说明 |
 |---|---|
+| `build_mode` | 构建模式，必填：`builtin`（编进内核，需刷 boot）/ `lkm`（可加载模块，不刷分区）；默认 `builtin` |
 | `root_solution` | root 方案，必填（4 选 1） |
 | `kmi` | 目标 KMI，必填 |
-| `kernel_branch` | AOSP 分支，留空 = `<kmi>-lts`；也可填 `android15-6.6-2026-10` |
+| `kernel_branch` | AOSP 分支，按 `kmi-matrix.json` 的 `branch` 字段解析；也可手填 `android15-6.6-2026-10` |
 | `solution_ref` | root 源码引用，留空 = 配置里的默认分支（FinaSU `master` / KernelSU `main` / SukiSU `main` / KSU-Next `dev`） |
-| `enable_susfs` | 集成 SUSFS 内核补丁 |
+| `enable_susfs` | 集成 SUSFS 内核补丁（**仅 `builtin` 模式生效**） |
 | `skip_on_patch_failure` | 补丁失败时跳过（不中断构建） |
-| `kernel_tweaks` | 内核调优档位，见下节；默认 `safe` |
+| `kernel_tweaks` | 内核调优档位，见下节；默认 `safe`（**仅 `builtin` 模式生效**） |
 | `make_release` | 成功后创建 Release |
 | `release_tag` | 自定义 tag，留空自动生成 |
 
+## 构建模式：`builtin` vs `lkm`
+
+同一个流程支持两种交付形态，用 `build_mode` 切换。
+
+| | `builtin` | `lkm` |
+|---|---|---|
+| 形态 | `CONFIG_KSU=y`，编进内核 `Image` | `kernelsu.ko` 可加载模块 |
+| 需要刷分区？ | **是**（刷 boot / init_boot） | **否** |
+| 变砖风险 | 有（刷错 KMI 会不开机） | 极低（不碰分区，出问题删掉 `.ko` 重启即可） |
+| 产物 | AnyKernel3 zip | `aarch64/*.ko` + `x86_64/*.ko` |
+| 架构 | arm64 只有 | arm64 + **x86_64** |
+| SUSFS | 支持 | **不支持**（SUSFS 要直接改内核源码，LKM 不编译内核树） |
+| 内核调优 | 支持 | 不适用（不编内核） |
+| 何时用 | 想要最彻底、开机即生效的 root | 不想动分区 / 想跑模拟器或虚拟机 / 想随时卸掉 |
+
+**两者的共同点**：都要完整克隆源码仓库（`KSU_VERSION = 30000 + git rev-list --count HEAD`
+在树外编译时同样生效），都**不定义** `KSU_MANAGER_PACKAGE`。
+
+**LKM 的两个 KMI 特例**（已在 `scripts/build-lkm.sh` 里处理）：
+
+- `6.12` / `6.18` 必须开 `CONFIG_CFI_ICALL_NORMALIZE_INTEGERS`，否则模块加载时 CFI 校验失败
+- `6.18` 的 Kbuild 用 `MO=` 传模块源码目录 —— 上游注释写明
+  *"6.18 exports the external module source as srcroot when M/MO are used"*，
+  旧写法 `src=` 在 6.18 上会找不到源文件
+
 ## 内核调优档位（`kernel_tweaks`）
+
 
 > **先说清楚**：这一节的内容**不是** KernelSU / SUSFS 的功能。
 > 我逐条读过上游 FinaSU 的 `kernel/Kconfig`（只有 6 个 `KSU*` 项）和 SUSFS 补丁
@@ -162,7 +191,7 @@ AOSP kernel/common @ <kmi>-lts
         └─ 抓最新 Manager APK（Actions artifact 或 GitHub Release）
 ```
 
-## 六个关键实现细节
+## 七个关键实现细节
 
 ### 1. 多数方案必须完整克隆（不能 `--depth=1`）
 
@@ -269,8 +298,9 @@ bool is_manager_apk(char *path)
 - 拒绝模块 ZIP、重复条目、绝对路径与 `../` 穿越
 - 安装脚本（`update-binary`）体积上限 **4 MiB**
 
-所以打包后 workflow 会做一次自检（`unzip -Z1` 列条目 → 逐项断言），
-避免生成"刷不进去"的包。
+所以打包后 workflow 会调 `scripts/verify-ak3-zip.sh` 做一次自检
+（`unzip -Z1` 列条目 → 逐项断言），避免生成"刷不进去"的包。
+该脚本可独立运行：`bash scripts/verify-ak3-zip.sh <某个.zip>`。
 
 ### 5. 防格机保护（anti-brick）
 
@@ -302,8 +332,27 @@ bool is_manager_apk(char *path)
 
 > 兼容逻辑只做**分流与提示**，不修改 AK3 本体行为，因此对非一加/OPPO 机型无副作用。
 
+### 7. LKM 模式用上游自带的树外编译入口
 
-**单个 KMI 约 40–150 分钟**（取决于 runner 与是否开 SUSFS）。
+上游每个方案的 `<solution>/kernel/` 目录都自带一套 `Makefile`，它从环境变量取
+`KDIR`（内核构建目录）并据此决定 `KBUILD_ARGS`：
+
+```make
+ifeq ($(KMI),android17-6.18)
+KBUILD_ARGS := M=$(MDIR) MO=$(ODIR)
+else
+KBUILD_ARGS := M=$(ODIR) src=$(MDIR)
+endif
+```
+
+所以 LKM 模式**不需要把源码拷进内核树**，只要 `KDIR=<内核树> make` 即可。
+`scripts/build-lkm.sh` 做的就是：给 arm64 / x86_64 各准备一份内核构建目录
+（`gki_defconfig` + 关 LTO + 6.12/6.18 补 CFI + `modules_prepare` + 生成 SELinux 头），
+再分别编译，最后 `llvm-strip -d` 瘦身。
+
+> `llvm-strip -d` 只删调试段、保留符号表 —— 模块加载需要符号，不能整体 strip。
+
+**单个 KMI 约 40–150 分钟**（取决于 runner、构建模式与是否开 SUSFS）。
 本流程设计为**一次一个方案 / 一个 KMI**，避免大批量 CI 触发 GitHub 风控。
 
 ## 上游来源
@@ -315,12 +364,13 @@ bool is_manager_apk(char *path)
 | Manager APK | 各项目自己的 Actions / Release |
 | SUSFS | `ShirkNeko/susfs4ksu` |
 | AK3 框架 | `WildKernels/AnyKernel3@gki-2.0` |
+| LKM 编译方式 | 参考 FinaSU `.github/workflows/ddk-lkm.yml`（本项目改为现场生成 KDIR，不依赖预置 DDK 容器） |
 | 参考实现 | `LingLuo17/AnyKernel3@dev`、`ShirkNeko/GKI_KernelSU_SUSFS` |
 
 ## 风险提示
 
 - 刷内核**可能变砖**。刷前务必备份原厂 `boot.img` / `init_boot.img`。
-- 内置模式与 LKM 模式**不可共存**；从 LKM 转内置前请先还原原厂镜像。
+- `lkm` 模式不刷分区，但仍**与 `builtin` 不可共存**；从 `lkm` 转 `builtin` 前请先卸载模块。
 - AK3 脚本以 root 运行，请只刷可信包。
 - Manager 版本与内核版本不一致时会提示"需要更新内核"，这时把 `solution_ref`
   固定到该 Manager 对应的 commit 即可对齐。
@@ -331,13 +381,15 @@ bool is_manager_apk(char *path)
 
 ```
 .
-├── .github/workflows/build.yml    # 主构建流程
+├── .github/workflows/build.yml    # 主构建流程（builtin / lkm 双模式）
 ├── config/root-solutions.json     # root 方案注册表（唯一需要改的地方）
-├── config/kmi-matrix.json         # KMI 分支对照表
+├── config/kmi-matrix.json         # KMI 分支对照表（branch 字段是唯一真源）
 ├── config/kernel-tweaks.json      # 内核调优清单（网络/功耗/存储/内存/编译精简）
 ├── scripts/resolve-solution.sh    # 解析 root 方案配置 → workflow 输出
 ├── scripts/fetch-manager.sh       # 自动抓取最新 Manager APK
 ├── scripts/apply-tweaks.sh        # 按档位把调优项写进 .config
+├── scripts/build-lkm.sh           # LKM 模式：树外编译 kernelsu.ko（arm64 + x86_64）
+├── scripts/verify-ak3-zip.sh      # AnyKernel3 ZIP 合规自检
 └── README.md
 ```
 

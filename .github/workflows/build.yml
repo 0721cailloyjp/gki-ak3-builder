@@ -4,6 +4,14 @@ name: Build GKI Kernel + AnyKernel3
 on:
   workflow_dispatch:
     inputs:
+      build_mode:
+        description: "构建模式（builtin=编进内核需刷 boot / lkm=可加载模块 .ko 不刷分区，风险低）"
+        required: true
+        type: choice
+        default: builtin
+        options:
+          - builtin
+          - lkm
       root_solution:
         description: "root 方案（KSU 系列，均为正式主流项目）"
         required: true
@@ -131,6 +139,7 @@ jobs:
 
       - name: 输出构建参数
         run: |
+          echo "构建模式      : ${{ inputs.build_mode }}"
           echo "root 方案     : ${{ inputs.root_solution }}"
           echo "KMI           : ${{ inputs.kmi }}"
           echo "kernel branch : ${{ inputs.kernel_branch || '(auto -> lts)' }}"
@@ -302,6 +311,7 @@ jobs:
       # 四家（MoeSU / KernelSU / SukiSU-Ultra / KernelSU-Next）的 kernel/ 目录结构
       # 与 Kconfig 里 `config KSU` 定义完全一致，所以这段逻辑可以共用。
       - name: 集成 root 方案内核（built-in 模式）
+        if: ${{ inputs.build_mode == 'builtin' }}
         working-directory: gki
         run: |
           # 1) 找到内核的 drivers 目录
@@ -346,7 +356,7 @@ jobs:
           test -e "$DRIVER_DIR/kernelsu/Kconfig" && echo "OK: Kconfig 存在"
 
       - name: 应用 SUSFS 补丁
-        if: ${{ inputs.enable_susfs && steps.sol.outputs.sol_susfs_compatible == 'true' }}
+        if: ${{ inputs.enable_susfs && inputs.build_mode == 'builtin' && steps.sol.outputs.sol_susfs_compatible == 'true' }}
         working-directory: gki
         continue-on-error: ${{ inputs.skip_on_patch_failure }}
         run: |
@@ -410,7 +420,8 @@ jobs:
           fi
           echo "SUSFS applied (kernel side)."
 
-      - name: 配置内核（CONFIG_KSU=y）
+      - name: 配置内核（built-in：CONFIG_KSU=y）
+        if: ${{ inputs.build_mode == 'builtin' }}
         working-directory: gki
         run: |
           echo "==> gki_defconfig"
@@ -482,6 +493,7 @@ jobs:
             || { echo "::error::CONFIG_KSU 未生效，集成失败"; exit 1; }
 
       - name: 编译内核
+        if: ${{ inputs.build_mode == 'builtin' }}
         working-directory: gki
         run: |
           echo "==> 开始编译（预计 40-150 分钟）"
@@ -492,12 +504,48 @@ jobs:
           du -h arch/arm64/boot/Image
 
       - name: 校验内核内含 KSU
+        if: ${{ inputs.build_mode == 'builtin' }}
         working-directory: gki
         run: |
           strings arch/arm64/boot/Image | grep -m3 -iE "kernelsu|KSU" || echo "note: 未在 Image 中直接匹配到 ksu 字符串（可能被压缩），继续"
           echo "kernel release: $(make ARCH=arm64 $LLVM_MAKE_ARGS -s kernelrelease)"
 
+      # ---------------------------------------------------------------------
+      # LKM（可加载内核模块）模式
+      #
+      # 与 built-in 的差异：
+      #   * 不需要把源码拷进内核树，也不改任何内核配置
+      #   * 编译出 kernelsu.ko（aarch64 + x86_64），由 Manager(ksud) 运行时加载
+      #   * 不刷 boot 分区 → 风险极低，可随时卸载
+      #   * 6.12 / 6.18 需要 CONFIG_CFI_ICALL_NORMALIZE_INTEGERS
+      #   * 6.18 的 Kbuild 用 MO= 传模块源码目录（旧写法 src= 在 6.18 上失效）
+      #
+      # 注意：KSU_VERSION = 30000 + git rev-list --count HEAD 在树外编译时
+      # 同样生效（用的是源码仓库的 .git），所以依然必须完整克隆。
+      # ---------------------------------------------------------------------
+      - name: 编译 LKM 模块（kernelsu.ko）
+        if: ${{ inputs.build_mode == 'lkm' }}
+        run: |
+          chmod +x scripts/build-lkm.sh
+          bash scripts/build-lkm.sh \
+            "${{ steps.kmi.outputs.kmi }}" \
+            "$(pwd)/gki" \
+            "$(pwd)/ksu-src" \
+            "$(pwd)/lkm-out"
+
+          echo "--- LKM 产物 ---"
+          find lkm-out -name '*_kernelsu.ko' -exec ls -la {} \;
+
+      - name: 上传 LKM 模块
+        if: ${{ inputs.build_mode == 'lkm' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.sol.outputs.sol_name }}-GKI-${{ inputs.kmi }}-LKM
+          path: lkm-out/**/*_kernelsu.ko
+          if-no-files-found: error
+
       - name: 准备 AK3 打包目录
+        if: ${{ inputs.build_mode == 'builtin' }}
         run: |
           echo "==> clone AK3 @ $AK3_BRANCH"
           git clone --depth=1 --branch "$AK3_BRANCH" "$AK3_REPO" ak3
@@ -524,6 +572,7 @@ jobs:
       #     * 部分一加机型 ramdisk 为空（vendor_boot 承载）→ 需降级为整刷
       # ---------------------------------------------------------------------
       - name: 写入 GKI 版 anykernel.sh
+        if: ${{ inputs.build_mode == 'builtin' }}
         env:
           KMI_NAME: ${{ steps.kmi.outputs.kmi }}
           KMI_VER: ${{ steps.kmi.outputs.kv }}
@@ -694,6 +743,7 @@ jobs:
       #   * 安装脚本 (update-binary) 体积上限 4 MiB
       # 所以打包后要做一次自检，避免生成"刷不进去"的包。
       - name: 放入 Image 并打包 AnyKernel3
+        if: ${{ inputs.build_mode == 'builtin' }}
         id: pack
         env:
           KMI_NAME: ${{ steps.kmi.outputs.kmi }}
@@ -711,42 +761,11 @@ jobs:
           ls -la "$ZIP"
 
           echo "--- AK3 ZIP 合规自检 ---"
-          ENTRIES="$(unzip -Z1 "$ZIP")"
-          echo "$ENTRIES" | head -40
+          # 校验逻辑抽到 scripts/verify-ak3-zip.sh（上游 ksud 已加固 AnyKernel3 ZIP 校验：
+          # 恰好 1 个 update-binary / 顶层 anykernel.sh / 无重复条目 / 无绝对路径与 ../ 穿越
+          # / 无 module.prop / update-binary <= 4 MiB）
+          bash "$GITHUB_WORKSPACE/scripts/verify-ak3-zip.sh" "$ZIP"
 
-          # 1) update-binary 恰好 1 个
-          UBC="$(printf '%s\n' "$ENTRIES" | grep -c '^META-INF/com/google/android/update-binary$' || true)"
-          echo "update-binary 数量: $UBC"
-          [ "$UBC" = "1" ] || { echo "::error::update-binary 数量应为 1，实际 $UBC"; exit 1; }
-
-          # 2) 顶层 anykernel.sh 必须存在
-          printf '%s\n' "$ENTRIES" | grep -qx 'anykernel.sh' \
-            || { echo "::error::缺少顶层 anykernel.sh"; exit 1; }
-
-          # 3) 不允许重复条目
-          DUPS="$(printf '%s\n' "$ENTRIES" | sort | uniq -d || true)"
-          if [ -n "$DUPS" ]; then
-            echo "::error::ZIP 内存在重复条目："; echo "$DUPS"; exit 1
-          fi
-
-          # 4) 不允许绝对路径或 ../ 穿越
-          if printf '%s\n' "$ENTRIES" | grep -qE '^/|(^|/)\.\./'; then
-            echo "::error::ZIP 内存在绝对路径或 ../ 穿越条目"; exit 1
-          fi
-
-          # 5) 不允许混入模块 ZIP
-          if printf '%s\n' "$ENTRIES" | grep -qi '^module\.prop$'; then
-            echo "::error::ZIP 顶层出现 module.prop（模块 ZIP 混入）"; exit 1
-          fi
-
-          # 6) 安装脚本体积 <= 4 MiB
-          UB_SIZE="$(unzip -l "$ZIP" 'META-INF/com/google/android/update-binary' | awk 'NR>3{print $1}' | head -1)"
-          echo "update-binary 大小: ${UB_SIZE:-0} bytes"
-          if [ -n "$UB_SIZE" ] && [ "$UB_SIZE" -gt 4194304 ]; then
-            echo "::error::update-binary 超过 4 MiB"; exit 1
-          fi
-
-          echo "OK: AK3 ZIP 通过合规自检"
           echo "zip_name=$ZIP" >> $GITHUB_OUTPUT
           echo "zip_path=$(pwd)/$ZIP" >> $GITHUB_OUTPUT
 
@@ -826,6 +845,7 @@ jobs:
           echo "SHA256(apk) = $(sha256sum "$APK" | awk '{print $1}')"
 
       - name: 上传构建产物
+        if: ${{ inputs.build_mode == 'builtin' }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.sol.outputs.sol_name }}-GKI-${{ inputs.kmi }}-AnyKernel3
@@ -845,6 +865,7 @@ jobs:
             echo ""
             echo "| 项 | 值 |"
             echo "|---|---|"
+            echo "| 构建模式 | \`${{ inputs.build_mode }}\` |"
             echo "| root 方案 | \`${{ inputs.root_solution }}\` (${{ steps.sol.outputs.sol_name }}) |"
             echo "| KMI | \`${{ inputs.kmi }}\` |"
             echo "| AOSP branch | \`${{ steps.kmi.outputs.branch }}\` |"
@@ -863,15 +884,29 @@ jobs:
           } > RELEASE_NOTES.md
           cat RELEASE_NOTES.md
 
-      - name: 创建 Release
-        if: ${{ inputs.make_release }}
+      - name: 创建 Release（built-in）
+        if: ${{ inputs.make_release && inputs.build_mode == 'builtin' }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.release_tag || format('{0}-{1}-{2}', inputs.root_solution, inputs.kmi, github.run_number) }}
-          name: "${{ steps.sol.outputs.sol_name }} GKI ${{ inputs.kmi }}"
+          tag_name: ${{ inputs.release_tag || format('{0}-{1}-{2}-builtin', inputs.root_solution, inputs.kmi, github.run_number) }}
+          name: "${{ steps.sol.outputs.sol_name }} GKI ${{ inputs.kmi }} (built-in)"
           body_path: RELEASE_NOTES.md
           files: |
             ${{ steps.pack.outputs.zip_name }}
+            ${{ steps.manager.outputs.apk_path }}
+          fail_on_unmatched_files: false
+          generate_release_notes: false
+
+      - name: 创建 Release（LKM）
+        if: ${{ inputs.make_release && inputs.build_mode == 'lkm' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag || format('{0}-{1}-{2}-lkm', inputs.root_solution, inputs.kmi, github.run_number) }}
+          name: "${{ steps.sol.outputs.sol_name }} GKI ${{ inputs.kmi }} (LKM)"
+          body_path: RELEASE_NOTES.md
+          files: |
+            lkm-out/aarch64/*_kernelsu.ko
+            lkm-out/x86_64/*_kernelsu.ko
             ${{ steps.manager.outputs.apk_path }}
           fail_on_unmatched_files: false
           generate_release_notes: false
