@@ -109,7 +109,12 @@ jobs:
         env:
           ROOT_SOLUTION: ${{ inputs.root_solution }}
         run: |
-          chmod +x scripts/resolve-solution.sh
+          # 行尾自愈：任何 .sh 若是 CRLF，bash 会把 set -euo pipefail 里的 \r
+          # 当成选项字符，报 "set: pipefail: invalid option name" 直接退出。
+          # 本仓库靠 Git Data API 推送，绕过了 .gitattributes 的 eol=lf 过滤，
+          # 所以这里再兜一次底，保证脚本总能跑起来。
+          find scripts -name '*.sh' -type f -exec sed -i 's/\r$//' {} +
+          chmod +x scripts/*.sh
           bash scripts/resolve-solution.sh
           echo "--- 方案摘要 ---"
           echo "方案        : ${{ inputs.root_solution }}"
