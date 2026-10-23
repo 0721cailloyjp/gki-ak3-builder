@@ -902,6 +902,7 @@ jobs:
           name: ${{ steps.sol.outputs.sol_name }}-GKI-${{ inputs.kmi }}-LKM
           path: lkm-out/**/*_kernelsu.ko
           if-no-files-found: error
+          retention-days: 3
 
       # =====================================================================
       # 编译失败时的日志收集（always() + 编译步骤失败才跑）
@@ -942,7 +943,7 @@ jobs:
           name: ${{ steps.sol.outputs.sol_name }}-${{ inputs.kmi }}-失败日志
           path: build-logs/
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 3
 
       - name: 准备 AK3 打包目录
         if: ${{ inputs.build_mode == 'builtin' }}
@@ -1253,6 +1254,7 @@ jobs:
         with:
           name: ${{ steps.sol.outputs.sol_name }}-GKI-${{ inputs.kmi }}-AnyKernel3
           path: ${{ steps.pack.outputs.zip_name }}
+          retention-days: 3
 
       - name: 上传 Manager
         if: ${{ steps.manager.outputs.apk_path != '' }}
@@ -1260,6 +1262,7 @@ jobs:
         with:
           name: ${{ steps.sol.outputs.sol_name }}-Manager-${{ steps.manager.outputs.manager_version }}
           path: ${{ steps.manager.outputs.apk_path }}
+          retention-days: 3
 
       - name: 生成内核信息
         # 同样走 env:：下面的反引号是 markdown 代码块标记，若值里恰好含
